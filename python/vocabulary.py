@@ -1,0 +1,126 @@
+"""Local, explicit vocabulary and spelling normalization; no fuzzy substitutions."""
+import re
+from disfluency import LITERALS
+
+MAX_PERSONAL_TERMS = 200
+MAX_ACTIVE_TERMS = 48
+TOKEN = re.compile(r'(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_+.#/-]{1,39}')
+LETTERS = re.compile(r'(?<![A-Za-z0-9_])[A-Za-z0-9](?:[ \t]+[A-Za-z0-9]){1,23}(?![A-Za-z0-9_])')
+
+
+def personal_terms(values):
+    if not isinstance(values, list):
+        return []
+    result, seen = [], set()
+    for value in values[:MAX_PERSONAL_TERMS]:
+        if not isinstance(value, str):
+            continue
+        term = value.strip()
+        if not term or len(term) > 64 or any(ord(c) < 32 or ord(c) == 127 for c in term):
+            continue
+        key = term.casefold()
+        if key not in seen:
+            seen.add(key)
+            result.append(term)
+    return result
+
+
+def technical_token(term):
+    return (bool(re.fullmatch(r'[A-Za-z][A-Za-z0-9]{1,23}', term)) and
+            (sum(c.isupper() for c in term) >= 2 or any(c.isdigit() for c in term)))
+
+
+def personal_aliases(values, terms):
+    if not isinstance(values, list): return []
+    result, seen = [], set()
+    for row in values[:200]:
+        if not isinstance(row,dict): continue
+        old,new = row.get('heard'),row.get('term')
+        if not isinstance(old,str) or not isinstance(new,str): continue
+        if not 2 <= len(old) <= 64 or not 2 <= len(new) <= 64 or old == new or new not in terms: continue
+        if any(c in old+new for c in '\r\n\t') or re.findall(r'\d+',old) != re.findall(r'\d+',new): continue
+        if old not in seen: result.append({'heard':old,'term':new}); seen.add(old)
+    return result
+
+
+def normalize_aliases(raw, context):
+    """Compatibility boundary: a past correction never authorizes replacement.
+
+    Retain the stored pairs for inspection/undo, but use their canonical words
+    only as vocabulary hints. A text-only pair has neither acoustic evidence nor
+    sufficient context to overwrite a legitimate word such as get with git.
+    """
+    return raw,0
+
+
+def spelling_context(raw, context):
+    """Same-utterance canonical acronyms can resolve letter spacing, never homophones."""
+    result = dict(context)
+    rows = list(context.get('terms', []))
+    seen = {row['term'].casefold() for row in rows}
+    masked = LITERALS.sub(lambda m: ' ' * len(m[0]), raw)
+    for match in TOKEN.finditer(masked):
+        term = match[0].rstrip('./')
+        if technical_token(term) and term.casefold() not in seen:
+            rows.append({'term': term, 'source': 'utterance'})
+            seen.add(term.casefold())
+    result['terms'] = rows[:MAX_PERSONAL_TERMS + MAX_ACTIVE_TERMS]
+    return result
+
+
+def normalize_spelling(raw, context):
+    """Join one maximal spelled-letter group only when its exact spelling is known."""
+    known = {}
+    for row in context.get('terms', []):
+        term = row['term']
+        if re.fullmatch(r'[A-Za-z][A-Za-z0-9]{1,23}', term) and (row.get('source') == 'personal' or technical_token(term)):
+            known.setdefault(term.casefold(), term)
+    spans = [(m.start(), m.end()) for m in LITERALS.finditer(raw)]
+    count = 0
+    def replace(match):
+        nonlocal count
+        if any(match.start() < b and match.end() > a for a, b in spans):
+            return match[0]
+        key = re.sub(r'[ \t]', '', match[0]).casefold()
+        if key not in known:
+            return match[0]
+        count += 1
+        return known[key]
+    return LETTERS.sub(replace, raw), count
+
+
+def hotwords(context):
+    """Bound the ASR prompt; contextual terms rank ahead of unrelated personal words."""
+    background = context.get('initial', '') + '\n' + context.get('latest', '')
+    terms = [row['term'] for row in context.get('terms', [])]
+    relevant = [term for term in terms if term.casefold() in background.casefold()]
+    return list(dict.fromkeys(relevant + terms))[:MAX_ACTIVE_TERMS]
+
+
+def spelling_hints(raw, context):
+    """Bounded near-sound pairs from supplied text, never automatic replacements."""
+    from edits import grounded_spelling
+    stop=set('的了是在我你他她它这那就也都和与有个对不没无非零一二两三四五六七八九十百千万')
+    def candidates(text):
+        words=[]
+        for match in re.finditer(r'[\u4e00-\u9fff]{2,}',LITERALS.sub(' ',text)):
+            run=match[0]
+            for size in (2,3,4):
+                for i in range(len(run)-size+1):
+                    word=run[i:i+size]
+                    if not any(c in stop for c in word) and word not in words:words.append(word)
+        return words
+    heard=candidates(raw[:600])[:80]
+    # Only curated/extracted whole terms are candidates. Overlapping Chinese
+    # n-grams can invent fragments such as 后但/后大 and distract the editor.
+    # The model still sees the full utterance and can spot grounded variants.
+    known=list(dict.fromkeys(r['term'] for r in context.get('terms',[])))[:120]
+    pairs=[];seen=set()
+    for old in heard:
+        for new in known:
+            key=tuple(sorted((old,new)))
+            if old==new or len(old)!=len(new) or key in seen:continue
+            if grounded_spelling(raw,old,new,context):
+                pairs.append([old,new]);seen.add(key)
+                if len(pairs)>=8:return pairs
+    return pairs

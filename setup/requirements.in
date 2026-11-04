@@ -1,0 +1,8 @@
+# Known working local inference stack. Download/setup runs separately from offline inference.
+mlx==0.32.4
+mlx-lm==0.32.2
+mlx-audio==0.6.3
+numpy==2.4.6
+transformers==5.22.0
+huggingface-hub==2.4.0
+pypinyin==0.55.0
