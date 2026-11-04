@@ -26,4 +26,3 @@ for size in [16, 32, 128, 256, 512] {
         try bitmap.representation(using: .png, properties: [:])!.write(to: directory.appendingPathComponent(filename))
     }
 }
-

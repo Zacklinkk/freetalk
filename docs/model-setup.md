@@ -47,4 +47,3 @@ MACOSX_DEPLOYMENT_TARGET=14.0 uv pip compile setup/requirements.in \
 ```
 
 改变版本后，重新验证空目录安装、取消/续传、模型实际加载与整理效果。安装器使用 [uv 的独立 Python 支持](https://docs.astral.sh/uv/guides/install-python/)；仅版本锁定不能代替依赖安全审查。
-

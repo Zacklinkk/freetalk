@@ -35,4 +35,3 @@ last-microphone-*.json
 *.key
 auth/
 /tests/fixtures/
-

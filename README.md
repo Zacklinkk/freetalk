@@ -90,5 +90,6 @@ bash scripts/build.sh
 
 测试覆盖编辑约束、数字语境、词库、下载续传与失败恢复，以及 macOS 侧的输入目标身份、快捷键、历史容量、学习撤销和旧版迁移。公共测试使用合成样例；不包含个人录音、转写历史、词库或第三方逆向产物。模型效果和物理麦克风需要另行实测，单元测试通过不等于所有应用都能自动输入。
 
-架构与边界见 [设计说明](docs/architecture.md)，引导与手工验收见 [首次使用说明](docs/onboarding.md)。欢迎提交合成复现样例，见 [贡献说明](CONTRIBUTING.md)。源码采用 [MIT License](LICENSE)。
+下载模型后，可退出应用，用配置中的 Python 运行 `scripts/smoke-models.py --config <config.json> --audio <sample.wav>`。WAV 需为 16 kHz、单声道、16 位 PCM；该检查显示实际原稿、结果与耗时，不写入历史。请使用非私人样例，不要把真实口述报告上传到 Issue。
 
+架构与边界见 [设计说明](docs/architecture.md)，引导与手工验收见 [首次使用说明](docs/onboarding.md)，本次实测与限制见 [验证记录](docs/validation.md)。欢迎提交合成复现样例，见 [贡献说明](CONTRIBUTING.md)。源码采用 [MIT License](LICENSE)。

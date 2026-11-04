@@ -242,6 +242,7 @@ def validate_repair(raw, item, patches):
         found = narrow_numeric_repair(raw, old, new, cue, cue_base)
     if found is None: return None,'missing_repair_evidence'
     left,right,new,cs,ce,old=found
+    new = preserve_elliptical_quantity(old, new)
     if protected_span(raw,left,right) or protected_span(raw,cs,ce): return None,'literal_span'
     for word in ['如果','除非','只有','因为','比如','例如','不要','不能']:
         if word in old and word not in new: return None,'repair_drops_constraint'
@@ -252,6 +253,27 @@ def validate_repair(raw, item, patches):
     candidates=[(left,right,new),(cs,ce,'')]
     if any(l<r0 and r>l0 for l,r,_ in candidates for l0,r0,_ in patches): return None,'overlap'
     return candidates,None
+
+def preserve_elliptical_quantity(old, new):
+    """A spoken quantity without a noun changes the count, not its object.
+
+    The caller has already grounded both spans in this utterance. Keep the
+    original noun when the new clause only says a number and the same classifier;
+    retain any following instructions verbatim. Explicit new nouns stay explicit.
+    """
+    number = r'(?:\d+(?:\.\d+)?|[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二三四五六七八九]+)?)'
+    units = '个条份组次项页本张台人元秒分钟天年月'
+    head = re.split(r'[，,。.!！?？;；]', new, 1)[0]
+    proposal = re.fullmatch(r'(?P<prefix>.*?)(?P<number>' + number + r')(?P<unit>[' + units + r'])', head)
+    if not proposal: return new
+    matches = [m for m in re.finditer(r'(?P<number>' + number + r')(?P<unit>[' + units + r'])', old)
+               if m['unit'] == proposal['unit']]
+    if len(matches) != 1: return new
+    source = matches[0]
+    noun = old[source.end():]
+    if not noun or len(noun) > 32 or re.search(r'[\s，,。.!！?？;；]|' + number, noun): return new
+    if proposal['prefix'] and proposal['prefix'] != old[:source.start()]: return new
+    return old[:source.start()] + proposal['number'] + old[source.end('number'):] + new[len(head):]
 
 def narrow_numeric_repair(raw, old, new, cue, cue_base):
     """A model may copy unchanged context into new; change only a grounded number.

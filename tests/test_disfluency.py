@@ -77,6 +77,18 @@ class DisfluencyTests(unittest.TestCase):
         text,meta=repair(raw,'先保留十个测试样本','先保留十二个测试样本','不对，刚才说错了。改成十二个样本。')
         self.assertEqual(text,'先保留十二个测试样本。不要删掉日志。')
         self.assertEqual(meta['repair_count'],1)
+    def test_elliptical_quantity_keeps_noun_and_following_instruction(self):
+        cases = [
+            ('先用十个样本。不对，改成十二个，保留所有日志。', '十个样本', '十二个，保留所有日志', '不对，改成十二个，保留所有日志。', '先用十二个样本，保留所有日志。'),
+            ('复制五份会议记录。不对，改成六份，别覆盖原件。', '五份会议记录', '六份，别覆盖原件', '不对，改成六份，别覆盖原件。', '复制六份会议记录，别覆盖原件。'),
+            ('保留3个低风险样本。不对，改成4个。', '3个低风险样本', '4个', '不对，改成4个。', '保留4个低风险样本。'),
+        ]
+        for raw, old, new, cue, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(repair(raw, old, new, cue)[0], expected)
+    def test_explicit_new_noun_is_not_changed_back(self):
+        raw = '先用十个样本。不对，改成十二个文件。'
+        self.assertEqual(repair(raw, '十个样本', '十二个文件', '不对，改成十二个文件。')[0], '先用十二个文件。')
     def test_numeric_narrowing_rejects_changed_objects_or_polarity(self):
         for suffix,spoken in [('个测试样本','条日志'),('个低风险样本','个风险样本'),('个测试样本','个生产样本')]:
             raw='保留十'+suffix+'。不对，十二'+spoken+'。'
