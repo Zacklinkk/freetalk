@@ -19,13 +19,30 @@ def run(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
 
 
-def api(path, missing=False):
-    result = subprocess.run(['gh', 'api', path], text=True, capture_output=True)
+def api(path, missing=False, payload=None):
+    command = ['gh', 'api', path]
+    if payload is not None:
+        command += ['--method', 'POST', '--input', '-']
+    result = subprocess.run(command, input=json.dumps(payload) if payload is not None else None, text=True, capture_output=True)
     if result.returncode:
         if missing and 'HTTP 404' in result.stderr:
             return None
         raise RuntimeError(result.stderr.strip())
     return json.loads(result.stdout)
+
+
+def release_for_tag(tag):
+    # GitHub's /releases/tags/{tag} endpoint does not reliably expose a draft
+    # before its Git tag exists. The authenticated list includes our drafts.
+    page = 1
+    while True:
+        releases = api(f'repos/{REPO}/releases?per_page=100&page={page}')
+        for release in releases:
+            if release['tag_name'] == tag:
+                return release
+        if len(releases) < 100:
+            return None
+        page += 1
 
 
 def version_tuple(version):
@@ -72,7 +89,7 @@ def publish(output, info):
     run('git', '-C', str(ROOT), 'diff', '--exit-code')
     run('git', '-C', str(ROOT), 'diff', '--cached', '--exit-code')
     commit = run('git', '-C', str(ROOT), 'rev-parse', 'HEAD', capture_output=True).stdout.strip()
-    existing = api(f'repos/{REPO}/releases/tags/{tag}', missing=True)
+    existing = release_for_tag(tag)
     if existing and not existing['draft']:
         print(f'{tag} is already published; increase both version fields to publish another update.')
         return
@@ -89,9 +106,10 @@ def publish(output, info):
             raise RuntimeError('CFBundleVersion must increase for Sparkle to offer this update')
     assets, notes = prepare(output, info, tag, previous)
     if not existing:
-        run('gh', 'release', 'create', tag, '--repo', REPO, '--target', commit, '--draft', '--title', f'freetalk {version}', '--notes-file', str(notes))
+        existing = api(f'repos/{REPO}/releases', payload=dict(tag_name=tag,target_commitish=commit,draft=True,
+                       name=f'freetalk {version}',body=notes.read_text()))
     run('gh', 'release', 'upload', tag, '--repo', REPO, '--clobber', *(str(p) for p in assets))
-    uploaded = api(f'repos/{REPO}/releases/tags/{tag}')
+    uploaded = api(f'repos/{REPO}/releases/{existing["id"]}')
     remote = {row['name']: row for row in uploaded['assets']}
     for path in assets:
         row = remote.get(path.name)
@@ -99,7 +117,7 @@ def publish(output, info):
         if not row or row['size'] != path.stat().st_size or row.get('digest') != digest:
             raise RuntimeError('Uploaded asset did not match its local digest; release stays a draft')
     run('gh', 'release', 'edit', tag, '--repo', REPO, '--draft=false', '--latest')
-    published = api(f'repos/{REPO}/releases/tags/{tag}')
+    published = api(f'repos/{REPO}/releases/{existing["id"]}')
     if published['draft']:
         raise RuntimeError('Release is still a draft')
     print(published['html_url'])
