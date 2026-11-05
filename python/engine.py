@@ -96,6 +96,8 @@ class Editor:
         meta['term_formats'] = term_count
         meta['confirmed_corrections'] = alias_count
         meta['policy'] = policy
+        from disfluency import unresolved_correction
+        meta['warnings'] = ['unresolved_self_correction'] if unresolved_correction(text) else []
         meta['seconds'] = time.perf_counter() - started
         return text, meta
 
@@ -136,10 +138,13 @@ class Editor:
             user += "原稿/背景中存在的近音写法（不是替换命令；同一对象才统一，否则保留不同含义）："+json.dumps(hints,ensure_ascii=False)+"\n"
         user += "排版：" + ("允许适度分段" if context.get('layout_policy')=='paragraphs' else "连续段落") + "\n"
         if self.mode == 'edits':
-            from edits import split_units, restart_candidates
+            from edits import split_units, restart_candidates, repetition_candidates
             restarts=restart_candidates(raw) if restart_mode else []
             if restarts:
                 user += '已核对原文范围的整句撤回候选（仅当语义上确属同一要求的撤回重述时选择，编号照抄）：' + json.dumps(restarts,ensure_ascii=False) + '\n'
+            repeats = repetition_candidates(raw)
+            if repeats:
+                user += '相邻重复起头候选（逐项判断是否为口吃；没有新增信息且不是强调时放入edits，不能漏掉后续内容）：' + json.dumps(repeats,ensure_ascii=False) + '\n'
             user += '句子：' + json.dumps(list(enumerate(split_units(raw))), ensure_ascii=False)
         else:
             user += "原稿：" + raw

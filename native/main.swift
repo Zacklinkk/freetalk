@@ -440,9 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let elapsed = Date().timeIntervalSince(self.stopped)
                     let cleanup = result["cleanup"] as? [String: Any] ?? [:]
                     let modelUsed = cleanup["model_used"] as? Bool ?? false
-                    let cleanupState = cleanup["status"] as? String ?? "unknown"
-                    let applied = cleanup["applied_edits"] as? Int ?? 0
-                    let cleanupLabel = modelUsed ? (cleanupState == "fallback" ? "小模型已调用，保守回退" : applied > 0 ? "小模型整理" : "小模型已检查 · 未改动词句") : "快速规则整理（未调用模型）"
+                    let cleanupLabel = cleanupSummary(cleanup)
                     let routes = cleanup["signals"] as? [String] ?? []
                     self.detailsLabel.stringValue = String(format: "音频 %.1f 秒 · 停止到文字 %.2f 秒 · 整理 %.2f 秒", duration, elapsed, cleanup["seconds"] as? Double ?? 0) + "\n" + cleanupLabel
                     self.currentEntry = VoiceHistoryEntry(id: token.uuidString, createdAt: Date(), text: self.lastText, raw: self.lastRaw,

@@ -82,10 +82,19 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     private var permissionButtons: [NSButton] = []
     private var trialButton: NSButton?
     private var trialStatus: NSTextField?
+    private var trialPicker: NSPopUpButton?
     private var trialRaw: NSTextView?, trialResult: NSTextView?
     private var mark: VoiceMarkView?
     private var finalStatus: NSTextField?
     private var raw = "", result = "", resultDetail = ""
+    private struct TrialResult {
+        let number: Int, raw: String, text: String, detail: String
+    }
+    // Practice stays in memory. Keep enough attempts to compare without changing
+    // the promise that onboarding never writes the normal transcription history.
+    private var trials: [TrialResult] = []
+    private var trialNumber = 0
+    private var selectedTrial: Int?
     var wantsTrial: Bool { window.isVisible && window.isKeyWindow && step == 3 }
     init(app: AppDelegate) {
         self.app = app
@@ -131,7 +140,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     private func add(_ view:NSView) { content.addArrangedSubview(view); view.widthAnchor.constraint(equalTo:content.widthAnchor).isActive = true }
     private func render() {
         for view in content.arrangedSubviews { content.removeArrangedSubview(view); view.removeFromSuperview() }
-        download = nil; permissionLabels = []; permissionButtons = []; trialButton = nil; trialStatus = nil; trialRaw = nil; trialResult = nil; mark = nil; finalStatus = nil
+        download = nil; permissionLabels = []; permissionButtons = []; trialButton = nil; trialStatus = nil; trialPicker = nil; trialRaw = nil; trialResult = nil; mark = nil; finalStatus = nil
         switch step {
         case 0:
             let wave = VoiceMarkView(); content.addArrangedSubview(wave); mark = wave
@@ -150,14 +159,17 @@ final class OnboardingController: NSObject, NSWindowDelegate {
             }
             add(app.label("系统弹窗需要你本人确认。暂不开放跨应用输入或快捷键，也可以先在引导里试说。",size:12,color:.secondaryLabelColor))
         case 3:
-            heading("试着说一句。","轻按右 Option 开始，再按一次结束；也可以点击按钮。\n这次结果只显示在下面，不会输入到其他应用或保存到历史。")
+            heading("试着说一句。","轻按右 Option 开始，再按一次结束；也可以点击按钮。\n最近10次试说仅在本次运行中保留，退出即清除，不输入其他应用。")
             add(app.card("可以照着读",views:[app.label("呃，先用十个样本，不对，改成十二个。保留所有日志。",size:17)]))
             let wave = VoiceMarkView(); wave.heightAnchor.constraint(equalToConstant:45).isActive = true; mark = wave
             let button = NSButton(title:"开始试说",target:self,action:#selector(recordTrial)); button.bezelStyle = .rounded; button.controlSize = .large; trialButton = button
             content.addArrangedSubview(app.row([wave,button]))
             let status = app.label("",size:12,color:.secondaryLabelColor); trialStatus = status; add(status)
-            trialRaw = textArea(title:"识别原稿",text:raw,height:60)
-            trialResult = textArea(title:"整理结果",text:result,height:86)
+            let picker = NSPopUpButton(); picker.target = self; picker.action = #selector(selectTrial(_:)); picker.setAccessibilityLabel("本次试说记录"); trialPicker = picker
+            add(app.row([app.label("查看试说",size:11,color:.secondaryLabelColor),picker]))
+            reloadTrials()
+            trialRaw = textArea(title:"识别原稿",text:raw,height:48)
+            trialResult = textArea(title:"整理结果",text:result,height:72)
         default:
             heading("下一句话，就用声音。","把光标放进任意可编辑的输入框，轻按右 Option。\n结束后先检查草稿，再由你发送。")
             let state = app.label("",size:14); finalStatus = state
@@ -191,18 +203,37 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         download?.refresh()
         trialButton?.title = app.phase == .recording ? "停止并整理" : app.phase == .preparing ? "取消启动" : app.phase == .processing ? "正在整理…" : result.isEmpty ? "开始试说" : "再试一次"
         trialButton?.isEnabled = app.worker.ready && mic && app.phase != .processing && !app.modelSetup.busy
+        trialPicker?.isEnabled = idle && !trials.isEmpty
         mark?.level = app.phase == .recording ? app.level : 0
         trialStatus?.stringValue = app.tutorialSession ? app.statusText : !mic ? "请先允许麦克风访问。" : !app.worker.ready ? app.modelText : resultDetail.isEmpty ? "准备好后点击开始。没有朗读也可以跳过。" : resultDetail
         finalStatus?.stringValue = "本地模型：\(app.worker.ready ? "已就绪" : "等待准备")\n麦克风：\(mic ? "已允许" : "尚未允许")\n跨应用输入：\(ax ? "已允许" : "需在设置中允许")\n右 Option：\(keys ? "可用" : "需在设置中允许")"
     }
     func partial(_ text:String) { trialRaw?.string = text }
-    func begin() { raw = ""; result = ""; resultDetail = ""; trialRaw?.string = ""; trialResult?.string = "" }
+    func begin() { raw = ""; result = ""; resultDetail = ""; selectedTrial = nil; reloadTrials(); trialRaw?.string = ""; trialResult?.string = "" }
     func complete(_ response:[String:Any], elapsed:Double) {
         raw = response["raw"] as? String ?? ""; result = response["text"] as? String ?? raw
         let cleanup = response["cleanup"] as? [String:Any] ?? [:]
-        let route = cleanup["model_used"] as? Bool == true ? "小模型已检查" : "快速规则整理"
-        resultDetail = result.isEmpty ? "没有识别到文字，请检查麦克风后再试。" : String(format:"停止到文字 %.2f 秒 · %@",elapsed,route)
+        resultDetail = result.isEmpty ? "没有识别到文字，请检查麦克风后再试。" : String(format:"停止到文字 %.2f 秒 · %@",elapsed,cleanupSummary(cleanup))
+        trialNumber += 1
+        trials.append(TrialResult(number:trialNumber,raw:raw,text:result,detail:resultDetail))
+        if trials.count > 10 { trials.removeFirst(trials.count-10) }
+        selectedTrial = trials.count-1; reloadTrials()
         trialRaw?.string = raw; trialResult?.string = result; refresh()
+    }
+    private func reloadTrials() {
+        guard let picker = trialPicker else { return }
+        picker.removeAllItems()
+        if selectedTrial == nil { picker.addItem(withTitle:trials.isEmpty ? "完成试说后可回看" : "本次结果尚未完成") }
+        for trial in trials.reversed() { picker.addItem(withTitle:"第\(trial.number)次 · \(trial.text.isEmpty ? "未识别到文字" : String(trial.text.prefix(22)))") }
+        if let selected = selectedTrial { picker.selectItem(at:trials.count-1-selected) }
+    }
+    @objc private func selectTrial(_ sender:NSPopUpButton) {
+        let offset = selectedTrial == nil ? 1 : 0
+        let index = trials.count-1-(sender.indexOfSelectedItem-offset)
+        guard app.phase == .idle, trials.indices.contains(index) else { return }
+        let trial = trials[index]; selectedTrial = index
+        raw = trial.raw; result = trial.text; resultDetail = trial.detail
+        reloadTrials(); trialRaw?.string = raw; trialResult?.string = result; refresh()
     }
     @objc private func grant(_ sender:NSButton) { if sender.tag == 0 { app.requestMic() } else if sender.tag == 1 { app.requestAX() } else { app.requestKeys() }; refresh() }
     @objc private func recordTrial() { app.toggle() }

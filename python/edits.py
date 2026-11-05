@@ -2,7 +2,7 @@
 import difflib
 import re
 from functools import lru_cache
-from disfluency import LITERALS, START_CUE, EN_CUE, RESTART_HEAD, correction_signal, strip_repair_cue
+from disfluency import LITERALS, START_CUE, EN_CUE, RESTART_HEAD, JOINED_CUE, adjacent_repetitions, correction_signal, strip_repair_cue
 
 def core(text):
     return re.sub(r'[\W_]', '', text).lower()
@@ -152,6 +152,25 @@ def replace_spans(raw, patches):
     for left,right,new in sorted(patches,reverse=True): raw=raw[:left]+new+raw[right:]
     return raw
 
+def repetition_candidates(raw):
+    return [{'old':m[0], 'new':m['word'], 'kind':'stutter'} for m in adjacent_repetitions(raw)
+            if not protected_span(raw, m.start(), m.end()) and raw.count(m[0]) == 1][:8]
+
+def repetition_cleanup(raw, old, new, start):
+    """Only collapse a model-selected, exact adjacent prefix, including its pause."""
+    if start < 0: return False
+    for match in adjacent_repetitions(raw):
+        # Keep the final occurrence; the later clause contains all the content.
+        left, right = match.start(), match.end() - len(match['word'])
+        if start <= left < right <= start + len(old):
+            candidate = old[:left-start] + old[right-start:]
+            if candidate == new: return True
+        # The common model plan keeps the first occurrence instead of the last.
+        if start <= match.start() and match.end() <= start + len(old):
+            candidate = old[:match.start()-start] + match['word'] + old[match.end()-start:]
+            if candidate == new: return True
+    return False
+
 def preclean(raw, context=None):
     """Offset-addressed cheap edits also handle repeated identical filler tokens."""
     patches=[]
@@ -212,7 +231,7 @@ def validate_repair(raw, item, patches):
     # Models sometimes copy the whole sentence or include a following reason.
     # Narrow the proposal to its literal repair clause, never delete that extra data.
     found=None
-    starts=[0]+[m.end() for m in re.finditer(r'[，,。.!！?？;；]',cue)]
+    starts=sorted(set([0]+[m.end() for m in re.finditer(r'[，,。.!！?？;；]',cue)]+[m.start() for m in JOINED_CUE.finditer(cue)]))
     for offset in starts:
         fragment=cue[offset:]
         marker=START_CUE.match(fragment) or EN_CUE.match(fragment)
@@ -239,10 +258,13 @@ def validate_repair(raw, item, patches):
             found=(left,right,candidate,cs,ce,target);break
         if found: break
     if found is None:
-        found = narrow_numeric_repair(raw, old, new, cue, cue_base)
+        for offset in starts:
+            found = narrow_numeric_repair(raw, old, new, cue[offset:], cue_base+offset)
+            if found: break
     if found is None: return None,'missing_repair_evidence'
     left,right,new,cs,ce,old=found
     new = preserve_elliptical_quantity(old, new)
+    cs = complete_repair_cue(raw, right, cs)
     if protected_span(raw,left,right) or protected_span(raw,cs,ce): return None,'literal_span'
     for word in ['如果','除非','只有','因为','比如','例如','不要','不能']:
         if word in old and word not in new: return None,'repair_drops_constraint'
@@ -253,6 +275,26 @@ def validate_repair(raw, item, patches):
     candidates=[(left,right,new),(cs,ce,'')]
     if any(l<r0 and r>l0 for l,r,_ in candidates for l0,r0,_ in patches): return None,'overlap'
     return candidates,None
+
+def complete_repair_cue(raw, target_end, cue_start):
+    """Extend an accepted repair over an immediately connected cue chain.
+
+    Never delete a free-standing '不对' merely because it looks like a filler.
+    A separate judgment such as '这个结果不对' is not part of the cue chain.
+    """
+    for start in range(max(target_end, cue_start-80), cue_start):
+        fragment = raw[start:cue_start]
+        marker = START_CUE.fullmatch(fragment)
+        if not marker:
+            if start and raw[start-1].isascii() and raw[start-1].isalnum(): continue
+            marker = EN_CUE.fullmatch(fragment)
+        if not marker or not core(fragment) or protected_span(raw, start, cue_start): continue
+        # An unpunctuated cue can directly follow the corrected phrase or its
+        # object. Do not absorb the end of a different, intervening clause.
+        if start > target_end and raw[start-1] not in ' ，,。.!！?？;；\n':
+            if re.search(r'[，,。.!！?？;；\n]', raw[target_end:start]): continue
+        return start
+    return cue_start
 
 def preserve_elliptical_quantity(old, new):
     """A spoken quantity without a noun changes the count, not its object.
@@ -308,7 +350,9 @@ def narrow_numeric_repair(raw, old, new, cue, cue_base):
                 if tag == 'equal': continue
                 if tag != 'delete': valid = False; break
                 removed += original_suffix[i:j]
-            if not valid or re.search(r'不|无|非|未|低|高|大|小|新|旧|仅|限|至|约|每|最|以上|以下|至少|最多', removed): continue
+            # Bare classifier = elliptical quantity, so retain all original
+            # modifiers. A partially repeated noun must not drop its polarity.
+            if not valid or (len(suffix)>1 and re.search(r'不|无|非|未|低|高|大|小|新|旧|仅|限|至|约|每|最|以上|以下|至少|最多', removed)): continue
             left = source.index(old)+a.start()
             if cue_base-left-len(a[0]) > 900: continue
             return left,left+len(a[0]),b[0],cue_base,cue_base+marker.end()+len(phrase),a[0]
@@ -420,6 +464,7 @@ def apply_plan(raw, plan, context):
         if not reason and protected_span(raw,start,end):reason='literal_span'
         if not reason and rewrites_learned_alias(old,new,context):reason='learned_alias_requires_audio'
         discourse=contextual_cleanup(raw,old,new,start,edit.get('kind'))
+        repetition=repetition_cleanup(raw,old,new,start)
         spelling=edit.get('kind')=='spelling' and grounded_spelling(raw,old,new,context)
         if not spelling and edit.get('kind')=='spelling':
             # Models sometimes include unchanged neighboring words in a spelling
@@ -430,7 +475,7 @@ def apply_plan(raw, plan, context):
             spelling=grounded_spelling(raw,old[left:len(old)-right],new[left:len(new)-right],context)
         if not reason and not discourse and removes_particle(raw,old,new,start):reason='meaningful_particle'
         if not reason and any(start<right and end>left for left,right,_ in patches):reason='overlap'
-        if not reason and not (discourse or spelling or allowed(old,new,context)):reason='unsupported_rewrite'
+        if not reason and not (discourse or spelling or repetition or allowed(old,new,context)):reason='unsupported_rewrite'
         if reason:rejected.append({**edit,'reason':reason})
         else:patches.append((start,end,new))
     outputs,offset=[],0
