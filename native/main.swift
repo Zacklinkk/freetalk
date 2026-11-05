@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var modelSetup = ModelSetup(support:support,resources:Bundle.main.resourceURL!)
     lazy var onboarding = OnboardingController(app:self)
     var modelSetupView: ModelDownloadView?
+    lazy var appUpdater = AppUpdater()
+    var appUpdateView: AppUpdateView?
     var tutorialSession = false
     lazy var historyStore = VoiceHistoryStore(directory: support)
     lazy var historyWindow = HistoryWindow(store: historyStore)
@@ -94,6 +96,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         _ = historyStore
         createMenu(); createWindow(); refreshDevices()
+        appUpdater.canInstall = { [weak self] in
+            guard let self = self else { return false }
+            return self.phase == .idle && !self.inserter.busy && !self.modelSetup.busy
+        }
+        appUpdater.onChange = { [weak self] in self?.refreshUI() }
+        appUpdater.onFocus = { [weak self] in self?.showUpdates() }
+        appUpdater.start()
         modelSetup.onChange = { [weak self] in self?.refreshUI() }
         modelSetup.onComplete = { [weak self] in self?.reloadModel() }
         deviceMonitor.onChange = { [weak self] in
@@ -192,7 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordMenu = NSMenuItem(title: "开始录音", action: #selector(menuToggle), keyEquivalent: ""); recordMenu.target = self; menu.addItem(recordMenu)
         let cancel = NSMenuItem(title: "取消录音 / 处理", action: #selector(cancelAction), keyEquivalent: ""); cancel.target = self; menu.addItem(cancel)
         menu.addItem(.separator())
-        for (title, action) in [("设置与最近结果…", #selector(showWindow)), ("首次使用引导…",#selector(showOnboarding)), ("权限设置引导…",#selector(showPermissionGuide)), ("下载本地模型…",#selector(showModels)), ("个人词库…", #selector(showVocabulary)), ("转写历史（最多500条）…", #selector(showHistory)), ("复制最近结果", #selector(copyResult)), ("重新加载模型", #selector(reloadModel)), ("退出 freetalk", #selector(quit))] {
+        for (title, action) in [("设置与最近结果…", #selector(showWindow)), ("软件更新…",#selector(showUpdates)), ("首次使用引导…",#selector(showOnboarding)), ("权限设置引导…",#selector(showPermissionGuide)), ("下载本地模型…",#selector(showModels)), ("个人词库…", #selector(showVocabulary)), ("转写历史（最多500条）…", #selector(showHistory)), ("复制最近结果", #selector(copyResult)), ("重新加载模型", #selector(reloadModel)), ("退出 freetalk", #selector(quit))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
         statusItem.menu = menu
@@ -214,7 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let recording = phase == .recording
         recordButton?.title = recording ? "停止并转写" : phase == .preparing ? "取消启动" : "开始录音"
         recordMenu?.title = recordButton?.title ?? "开始录音"
-        recordButton?.isEnabled = recording || phase == .preparing || (phase == .idle && worker.ready && !inserter.busy && !modelSetup.busy)
+        recordButton?.isEnabled = !appUpdater.installing && (recording || phase == .preparing || (phase == .idle && worker.ready && !inserter.busy && !modelSetup.busy))
         recordMenu?.isEnabled = recordButton?.isEnabled ?? false
         micPicker?.isEnabled = phase == .idle
         let icon = recording ? "stop.circle.fill" : (phase == .processing ? "ellipsis.circle" : (worker.ready ? "mic" : "mic.slash"))
@@ -230,6 +239,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         refreshPermissions()
         modelSetupView?.refresh()
+        appUpdateView?.refresh()
+        if sidebarButtons.count > 4 { sidebarButtons[4].title = appUpdater.hasUpdate ? "软件更新 · 有更新" : "软件更新" }
     }
     func refreshPermissions() {
         let permissions = VoicePermissions.current(shortcutActive:hotkey.active)
@@ -322,7 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func recheckPermissions() { updateHotkey(); prepareSelectedDevice(); refreshPermissions() }
     @objc func revealApplication() { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
     @objc func delayedStart() {
-        guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy else { return }
+        guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !appUpdater.installing else { return }
         phase = .preparing; session = UUID(); let token = session
         setStatus("5秒后录音，请切回目标输入框并放好光标")
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
@@ -346,7 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func toggle() {
         if phase == .recording { stopRecording(); return }
         if phase == .preparing { cancelRecording(reload:false); return }
-        guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy else { return }
+        guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !appUpdater.installing else { return }
         tutorialSession = onboarding.wantsTrial
         if tutorialSession { onboarding.begin() }
         correctionLearner.stop(); learningHUD.hide()
@@ -513,11 +524,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let resource = Bundle.main.resourceURL { worker.start(config: config, resource: resource, support: support) }
     }
     func beginModelDownload(only:String = "all") {
-        guard phase == .idle, !inserter.busy else { setStatus("请先结束当前录音或处理，再下载模型。"); return }
+        guard phase == .idle, !inserter.busy, !appUpdater.installing else { setStatus("请先结束当前操作，再下载模型。"); return }
         modelSetup.start(config:config,only:only,source:ModelDownloadSource.preferred)
     }
     @objc func showOnboarding() { onboarding.show() }
     @objc func showPermissionGuide() { onboarding.showPermissions() }
+    @objc func showUpdates() {
+        showWindow(); settingsTabs.selectTabViewItem(at:4)
+        for (index,button) in sidebarButtons.enumerated() { button.state = index == 4 ? .on : .off }
+    }
     @objc func showModels() {
         showWindow(); settingsTabs.selectTabViewItem(at:3)
         for (index,button) in sidebarButtons.enumerated() { button.state = index == 3 ? .on : .off }

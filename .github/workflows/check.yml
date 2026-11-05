@@ -18,3 +18,29 @@ jobs:
       - run: PYTHON=python bash scripts/test.sh
       - run: bash scripts/build.sh
       - run: codesign --verify --deep --strict build/freetalk.app
+      - run: python scripts/test-updater-integration.py
+  publish-release:
+    needs: test-and-build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Zacklinkk/freetalk'
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    concurrency:
+      group: freetalk-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Publish signed release when the version changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FREETALK_SPARKLE_PRIVATE_KEY: ${{ secrets.FREETALK_SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$FREETALK_SPARKLE_PRIVATE_KEY" ]; then
+            echo 'Missing FREETALK_SPARKLE_PRIVATE_KEY repository secret.' >&2
+            exit 1
+          fi
+          python scripts/publish-release.py --publish

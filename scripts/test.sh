@@ -10,7 +10,7 @@ fi
 mkdir -p build/tests
 native_test() {
   local name="$1"; shift
-  swiftc -swift-version 5 "$@" "tests/$name.swift" \
+  swiftc -swift-version 5 -target "$(uname -m)-apple-macos14.0" "$@" "tests/$name.swift" \
     -framework AppKit -framework AVFoundation -framework ApplicationServices \
     -framework Carbon -framework CoreAudio -framework AudioToolbox -framework NaturalLanguage \
     -o "build/tests/$name"
@@ -24,3 +24,5 @@ native_test CorrectionsTests native/Corrections.swift native/Vocabulary.swift na
 native_test SetupMigrationTests native/ModelSetup.swift
 native_test SetupProcessTests native/ModelSetup.swift
 native_test PermissionTests native/Permissions.swift
+sparkle_dir="$(bash scripts/prepare-sparkle.sh)"
+native_test UpdaterTests native/AppUpdater.swift -F "$sparkle_dir" -framework Sparkle -Xlinker -rpath -Xlinker "$sparkle_dir"

@@ -76,7 +76,7 @@ final class ModelDownloadView: NSStackView {
         else { progress.isIndeterminate = true; if manager.busy { progress.startAnimation(nil) } else { progress.stopAnimation(nil) } }
         progress.isHidden = !manager.busy && manager.fraction == nil
         start.title = manager.failed ? "重试下载" : ModelSetup.configured(app.config) ? "校验已安装模型 / 补齐下载" : "下载推荐模型与运行环境"
-        start.isEnabled = !manager.busy && app.phase == .idle
+        start.isEnabled = !manager.busy && app.phase == .idle && !app.appUpdater.installing
         for button in downloads { button.isEnabled = start.isEnabled }
         cancel.isHidden = !manager.busy; cancel.isEnabled = manager.busy
     }

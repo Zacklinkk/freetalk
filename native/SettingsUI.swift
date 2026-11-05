@@ -32,7 +32,7 @@ extension AppDelegate {
         let brand = label("freetalk", size: 19); nav.addArrangedSubview(brand)
         let tagline = label("你的本地语音输入", size: 11, color: .secondaryLabelColor); nav.addArrangedSubview(tagline)
         nav.setCustomSpacing(24, after: tagline)
-        for (index, entry) in [("语音输入","mic"),("最近转写","text.bubble"),("常用词与学习","character.book.closed"),("本地模型","cpu")].enumerated() {
+        for (index, entry) in [("语音输入","mic"),("最近转写","text.bubble"),("常用词与学习","character.book.closed"),("本地模型","cpu"),("软件更新","arrow.triangle.2.circlepath")].enumerated() {
             let item = NSButton(title: entry.0, target: self, action: #selector(selectSettingsPage(_:)))
             item.image = NSImage(systemSymbolName: entry.1, accessibilityDescription: nil); item.imagePosition = .imageLeading; item.imageHugsTitle = true
             item.bezelStyle = .recessed; item.setButtonType(.pushOnPushOff); item.alignment = .left; item.tag = index
@@ -84,6 +84,8 @@ extension AppDelegate {
         let downloads = ModelDownloadView(app:self); modelSetupView = downloads
         addSettingsPage(settingsPage("本地模型",subtitle:"下载、校验和运行，都可以在这里完成。",cards:[downloads,
             card("运行状态",views:[modelLabel,row([button("重新加载模型",#selector(reloadModel)),button("打开本地文件夹",#selector(openModelStorage)),button("首次使用引导…",#selector(showOnboarding))]),label("模型常驻内存预算上限5 GiB，与磁盘大小不同。建议16 GB内存。\n音频不保存，转写历史和个人词库仅在本机。",size:12,color:.secondaryLabelColor)])]))
+        let updates = AppUpdateView(app:self); appUpdateView = updates
+        addSettingsPage(settingsPage("软件更新",subtitle:"有新版时在这里提醒，由你决定何时更新。",cards:[updates]))
         sidebarButtons[0].state = .on; settingsTabs.selectTabViewItem(at:0); refreshUI()
     }
     private func addSettingsPage(_ page: NSView) { let item = NSTabViewItem(); item.view = page; settingsTabs.addTabViewItem(item) }

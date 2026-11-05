@@ -20,12 +20,15 @@ Local speech-to-text and faithful dictation cleanup for Apple Silicon Macs. No a
 - 保存最近 500 条文字历史，超出后删除最旧记录；不保存录音。
 - 首次使用引导：逐项授权 → 准备模型 → 真实试说。原稿与整理结果对应，最近 10 次试说可回看，退出应用即清除；不写入其他应用或普通历史。
 - 在应用内下载本地模型和独立运行环境，支持官方源 / HF-Mirror 切换、源链接、百分比与下载速度、取消、续传、重试及文件校验。
+- 设置页提示新版本，点击后下载更新，显示进度并支持取消；下载校验完成后可安装并重启。
 
 ## 安装
 
 需要 **Apple Silicon、macOS 14 或更新版本**。建议至少 16 GB 统一内存和 8 GB 可用磁盘空间。首次下载需要访问 Hugging Face、GitHub 和 PyPI；准备好后推理离线运行。
 
-当前提供源码构建，需要 Xcode Command Line Tools：
+推荐从 [GitHub Releases](https://github.com/Zacklinkk/freetalk/releases/latest) 下载 `freetalk-版本号-macos-arm64.zip`，解压后将 `freetalk.app` 移到「应用程序」或 `~/Applications`，再打开。当前版本未做 Apple 公证，首次打开可能被 Gatekeeper 拦下；确认来自本仓库后，可按照系统「隐私与安全」中的提示允许打开，不要关闭系统安全功能。
+
+也可以从源码构建，需要 Xcode Command Line Tools：
 
 ```sh
 xcode-select --install # 已安装时跳过
@@ -51,7 +54,9 @@ open "$HOME/Applications/freetalk.app"
 
 默认构建采用本地 ad-hoc 签名，未做 Apple 公证；更新后 macOS 可能要求重新关联原有权限。开发者可通过 `FREETALK_SIGNING_IDENTITY` 使用自己的稳定签名身份。应用不修改系统隐私数据库，也不要求关闭系统安全功能。
 
-更新源码后，先从菜单退出 freetalk，再执行：
+从 0.3.0 起，在「设置 → 软件更新」检查新版、下载，然后点击「安装并重启」。默认启动时和每天自动检查，可关闭；不会自动下载。录音、文字处理和模型下载期间不会开始安装重启。0.2.x 尚无更新器，需要手动安装一次 0.3.0 或更新版本。
+
+使用源码更新时，先从菜单退出 freetalk，再执行：
 
 ```sh
 git pull --ff-only
@@ -82,6 +87,8 @@ open "$HOME/Applications/freetalk.app"
 
 历史和词库位于 `~/Library/Application Support/freetalk/`，使用本机文件权限保护，未做独立加密。改字学习只观察本次成功输入后的同一输入框，最多 90 秒；离开输入框或开始下一次录音就停止。它提供辨词提示，不训练权重，也不按错词做无条件替换。详见 [数据与学习说明](docs/privacy-and-learning.md)。
 
+自动更新检查会向 GitHub 请求版本列表；下载更新也从 GitHub 获取。请求不包含口述、词库或输入框内容，关闭 Sparkle 系统信息收集。更新列表和安装包均校验 Ed25519 签名。
+
 ## 开发与验证
 
 ```sh
@@ -93,6 +100,8 @@ bash scripts/build.sh
 ```
 
 测试覆盖编辑约束、数字语境、词库、下载续传与失败恢复，以及 macOS 侧的输入目标身份、快捷键、历史容量、学习撤销和旧版迁移。公共测试使用合成样例；不包含个人录音、转写历史、词库或第三方逆向产物。模型效果和物理麦克风需要另行实测，单元测试通过不等于所有应用都能自动输入。
+
+`python3 scripts/test-updater-integration.py` 使用临时测试应用和独立测试密钥，验证真实下载、签名、安装与重启，不访问 freetalk 的个人数据。[版本发布与自动更新说明](docs/updates.md)介绍版本号、签名密钥、GitHub Actions 和失败恢复。更新组件使用 [Sparkle](https://sparkle-project.org/)，许可随安装包放在 `Contents/Resources/Licenses/Sparkle.txt`。
 
 下载模型后，可退出应用，用配置中的 Python 运行 `scripts/smoke-models.py --config <config.json> --audio <sample.wav>`。WAV 需为 16 kHz、单声道、16 位 PCM；该检查显示实际原稿、结果与耗时，不写入历史。请使用非私人样例，不要把真实口述报告上传到 Issue。
 
