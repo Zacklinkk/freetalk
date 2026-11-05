@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var tutorialSession = false
     lazy var historyStore = VoiceHistoryStore(directory: support)
     lazy var historyWindow = HistoryWindow(store: historyStore)
+    var recentHistoryView: RecentHistoryView?
     lazy var vocabularyStore = VocabularyStore(directory: support)
     lazy var vocabularyWindow = VocabularyWindow(store: vocabularyStore)
     lazy var correctionStore = CorrectionStore(directory: support, vocabulary: vocabularyStore)
@@ -544,7 +545,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 targetApp: target?.name ?? "未锁定输入框", insertionStatus: "处理未完成，保留已识别文字", audioSeconds: seconds,
                 stopToTextSeconds: max(0, Date().timeIntervalSince(stopped)), cleanupSeconds: 0, cleanupStatus: "未完成整理", modelUsed: false)
         }
-        if let entry = currentEntry { historyStore.upsert(entry); if historyWindow.window.isVisible { historyWindow.refresh() } }
+        if let entry = currentEntry {
+            historyStore.upsert(entry); recentHistoryView?.refresh()
+            if historyWindow.window.isVisible { historyWindow.refresh() }
+        }
         let object: [String: Any] = ["text": lastText, "raw": lastRaw, "savedAt": ISO8601DateFormatter().string(from: Date())]
         if let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted,.sortedKeys]) {
             let file = support.appendingPathComponent("last-result.json")

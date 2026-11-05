@@ -9,10 +9,11 @@ extension AppDelegate {
         for view in views { stack.addArrangedSubview(view) }
         box.contentView = stack; return box
     }
-    func settingsPage(_ title: String, subtitle: String, cards: [NSView]) -> NSView {
+    func settingsPage(_ title: String, subtitle: String, cards: [NSView], fillsHeight: Bool = false) -> NSView {
         let page = NSView(), stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false; page.addSubview(stack)
         NSLayoutConstraint.activate([stack.topAnchor.constraint(equalTo: page.topAnchor, constant: 20), stack.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 26), stack.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -26), stack.bottomAnchor.constraint(lessThanOrEqualTo: page.bottomAnchor, constant: -20)])
+        if fillsHeight { stack.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -20).isActive = true }
         stack.addArrangedSubview(label(title, size: 24)); stack.addArrangedSubview(label(subtitle, color: .secondaryLabelColor))
         for card in cards { stack.addArrangedSubview(card); card.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
         return page
@@ -67,11 +68,16 @@ extension AppDelegate {
         resultView.font = .systemFont(ofSize:15); resultView.textContainerInset = NSSize(width:16,height:16)
         resultView.isVerticallyResizable = true; resultView.isHorizontallyResizable = false; resultView.autoresizingMask = [.width]; resultView.textContainer?.widthTracksTextView = true
         resultView.string = lastText; resultView.setAccessibilityLabel("最近转写结果")
-        let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .noBorder; scroll.documentView = resultView; scroll.heightAnchor.constraint(equalToConstant:350).isActive = true
+        let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .noBorder; scroll.documentView = resultView; scroll.heightAnchor.constraint(equalToConstant:140).isActive = true
         detailsLabel = label("原稿和结果仅在本机保留，最多500条。",size:12,color:.secondaryLabelColor)
         let resultCard = card("最近一次",views:[scroll,detailsLabel,row([button("复制",#selector(copyResult)),button("原稿 / 结果",#selector(showRaw)),button("全部历史",#selector(showHistory)),button("清除显示",#selector(clearResult))])])
         if let container = scroll.superview { scroll.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true }
-        addSettingsPage(settingsPage("最近转写",subtitle:"原稿留存，随时对照或复制。",cards:[resultCard]))
+        let recent = RecentHistoryView(store: historyStore); recentHistoryView = recent
+        recent.onOpen = { [weak self] id in self?.historyWindow.show(entryID: id) }
+        let historyCard = card("历史记录", views: [recent])
+        historyCard.setContentHuggingPriority(.defaultLow, for: .vertical)
+        if let container = recent.superview { recent.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true }
+        addSettingsPage(settingsPage("最近转写",subtitle:"最新结果在上方，向下浏览之前的记录。",cards:[resultCard,historyCard],fillsHeight:true))
 
         learningButton = NSButton(checkboxWithTitle: "自动学习本次输入后的改字 · 可撤销", target: self, action: #selector(preferencesChanged))
         learningButton.state = UserDefaults.standard.object(forKey:"learnCorrections") as? Bool == false ? .off : .on
@@ -89,5 +95,9 @@ extension AppDelegate {
         sidebarButtons[0].state = .on; settingsTabs.selectTabViewItem(at:0); refreshUI()
     }
     private func addSettingsPage(_ page: NSView) { let item = NSTabViewItem(); item.view = page; settingsTabs.addTabViewItem(item) }
-    @objc func selectSettingsPage(_ button: NSButton) { settingsTabs.selectTabViewItem(at:button.tag); for entry in sidebarButtons { entry.state = entry === button ? .on : .off } }
+    @objc func selectSettingsPage(_ button: NSButton) {
+        settingsTabs.selectTabViewItem(at:button.tag)
+        if button.tag == 1 { recentHistoryView?.refresh() }
+        for entry in sidebarButtons { entry.state = entry === button ? .on : .off }
+    }
 }

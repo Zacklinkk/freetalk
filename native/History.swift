@@ -98,13 +98,22 @@ final class HistoryWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         let detail = NSScrollView(); detail.documentView = text; detail.hasVerticalScroller = true; detail.borderType = .bezelBorder
         stack.addArrangedSubview(detail); detail.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true; detail.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
     }
-    func show() { refresh(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
-    @objc func refresh() {
-        let selected = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
+    func show(entryID: String? = nil) {
+        if entryID != nil { search.stringValue = ""; mode.selectedSegment = 0 }
+        reloadRows(selecting: entryID); window.makeKeyAndOrderFront(nil)
+        if entryID != nil, table.selectedRow >= 0 { table.scrollRowToVisible(table.selectedRow) }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    @objc func refresh() { reloadRows(selecting: nil) }
+    private func reloadRows(selecting entryID: String?) {
+        let selected = entryID ?? (rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil)
         let q = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         rows = store.entries.filter { q.isEmpty || $0.text.localizedCaseInsensitiveContains(q) || $0.raw.localizedCaseInsensitiveContains(q) }
         table.reloadData()
-        if !rows.isEmpty { table.selectRowIndexes(IndexSet(integer: rows.firstIndex(where: { $0.id == selected }) ?? 0), byExtendingSelection: false) }
+        if !rows.isEmpty {
+            let index = rows.firstIndex(where: { $0.id == selected }) ?? 0
+            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        }
         selectionChanged()
     }
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
