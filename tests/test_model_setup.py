@@ -24,7 +24,7 @@ class ModelSetupTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def serve(self, ignore_range=False, corrupt=False, incorrect_range=False):
+    def serve(self, ignore_range=False, corrupt=False, incorrect_range=False, truncate_first=0):
         data = self.data
         requests = []
         class Handler(BaseHTTPRequestHandler):
@@ -37,7 +37,7 @@ class ModelSetupTests(unittest.TestCase):
                 payload = data[offset:] if not corrupt else b'x' * (len(data)-offset)
                 self.send_header('Content-Length', str(len(payload)))
                 self.end_headers()
-                self.wfile.write(payload)
+                self.wfile.write(payload[:truncate_first] if truncate_first and len(requests)==1 else payload)
             def log_message(self, *_):
                 pass
         server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -89,6 +89,58 @@ class ModelSetupTests(unittest.TestCase):
             setup.fetch(url, target, self.row, attempts=1)
         self.assertEqual(partial.read_bytes(), self.data[:413])
         self.assertFalse(target.exists())
+
+    def test_source_choice_keeps_revision_and_filename(self):
+        model = {'repo':'test/model', 'revision':'a'*40}
+        official = setup.model_url(model, 'model.safetensors')
+        mirror = setup.model_url(model, 'model.safetensors', 'mirror')
+        self.assertEqual(official.replace('https://huggingface.co','https://hf-mirror.com'), mirror)
+        self.assertIn('/resolve/'+'a'*40+'/model.safetensors', mirror)
+        with self.assertRaises(setup.SetupError):
+            setup.model_url(model, 'model.safetensors', 'unknown')
+
+    def test_partial_download_can_continue_from_another_source(self):
+        first, _ = self.serve(truncate_first=413)
+        second, requests = self.serve()
+        target = self.root / self.row['name']
+        with self.assertRaises(setup.SetupError):
+            setup.fetch(first, target, self.row, attempts=1)
+        self.assertEqual(target.with_suffix('.safetensors.partial').stat().st_size, 413)
+        setup.fetch(second, target, self.row, attempts=1)
+        self.assertEqual(requests, ['bytes=413-'])
+        self.assertEqual(target.read_bytes(), self.data)
+
+    def test_disconnected_transfer_emits_retry_and_resumes(self):
+        url, requests = self.serve(truncate_first=413)
+        events = []
+        with patch.object(setup.time, 'sleep'):
+            setup.fetch(url, self.root/self.row['name'], self.row, attempts=2, status=lambda **event: events.append(event))
+        self.assertEqual(requests, [None,'bytes=413-'])
+        self.assertIn('retry', [e['stage'] for e in events])
+        self.assertEqual([e['received'] for e in events if e['stage']=='connecting'], [0,413])
+        self.assertEqual(events[-1]['stage'], 'verify')
+
+    def test_progress_arrives_before_a_large_file_finishes(self):
+        self.data *= 30
+        row = {**self.row, 'size':len(self.data), 'sha256':hashlib.sha256(self.data).hexdigest()}
+        url, _ = self.serve()
+        amounts=[]
+        setup.fetch(url, self.root/row['name'], row, amounts.append)
+        self.assertEqual(amounts[0],0)
+        self.assertTrue(any(0 < amount < len(self.data) for amount in amounts))
+        self.assertEqual(amounts[-1],len(self.data))
+
+    def test_http_protocol_failure_is_retried(self):
+        url, _ = self.serve()
+        real_open = setup.urllib.request.urlopen
+        calls=[]
+        def flaky(*args, **kwargs):
+            calls.append(1)
+            if len(calls)==1: raise setup.http.client.IncompleteRead(b'',1)
+            return real_open(*args,**kwargs)
+        with patch.object(setup.urllib.request,'urlopen',side_effect=flaky), patch.object(setup.time,'sleep'):
+            setup.fetch(url,self.root/self.row['name'],self.row)
+        self.assertEqual(len(calls),2)
 
     def catalog(self, filename='model.safetensors'):
         model = {'key': 'asrModel', 'name': 'test-model', 'title': '测试模型', 'repo': 'test/model',

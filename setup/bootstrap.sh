@@ -6,6 +6,11 @@ setup_dir="$(cd "$(dirname "$0")" && pwd)"
 support_dir="$1"
 existing_python="${2:-}"
 model_selection="${3:-all}"
+model_source="${4:-official}"
+case "$model_source" in
+  official|mirror) ;;
+  *) printf '%s\n' '{"event":"error","message":"不支持的模型下载来源"}'; exit 1 ;;
+esac
 child_pid=''
 cancel() {
   trap - TERM INT
@@ -65,4 +70,4 @@ if [ -z "$selected_python" ]; then
   run "$selected_python" "$setup_dir/check_runtime.py" >&2
 fi
 event '运行环境就绪，开始核对模型…'
-exec "$selected_python" -u "$setup_dir/models.py" --support "$support_dir" --python "$selected_python" --only "$model_selection"
+exec "$selected_python" -u "$setup_dir/models.py" --support "$support_dir" --python "$selected_python" --only "$model_selection" --source "$model_source"

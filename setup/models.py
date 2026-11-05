@@ -5,10 +5,12 @@ file is checked against the bundled SHA-256 manifest before configuration change
 """
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import re
 import shutil
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -19,9 +21,31 @@ from pathlib import Path
 class SetupError(Exception):
     pass
 
+SOURCES = {
+    'official': ('Hugging Face 官方', 'https://huggingface.co'),
+    'mirror': ('HF-Mirror（第三方）', 'https://hf-mirror.com'),
+}
+
+
+def model_url(model, filename, source='official'):
+    if source not in SOURCES:
+        raise SetupError('不支持的模型下载来源')
+    return f"{SOURCES[source][1]}/{model['repo']}/resolve/{model['revision']}/{urllib.parse.quote(filename)}"
+
+
+_last_log = 0.0
+
 
 def emit(**event):
-    print(json.dumps(event, ensure_ascii=False), flush=True)
+    global _last_log
+    line = json.dumps(event, ensure_ascii=False)
+    print(line, flush=True)
+    # stderr is the app's private setup.log. Include model failures as well as
+    # runtime installer output, with bounded progress logging on long downloads.
+    now = time.monotonic()
+    if event.get('stage') != 'download' or now-_last_log >= 5:
+        print(line, file=sys.stderr, flush=True)
+        _last_log = now
 
 
 def sha256(path):
@@ -61,7 +85,7 @@ def load_catalog(path):
     return catalog['models']
 
 
-def fetch(url, target, row, progress=lambda amount: None, attempts=3):
+def fetch(url, target, row, progress=lambda amount: None, attempts=3, status=lambda **_: None):
     """Resume a partial file only when the server confirms the exact byte range."""
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     partial = target.with_name(target.name + '.partial')
@@ -80,24 +104,28 @@ def fetch(url, target, row, progress=lambda amount: None, attempts=3):
         request = urllib.request.Request(url, headers={'User-Agent': 'freetalk-ModelSetup/0.2', 'Accept-Encoding': 'identity'})
         if offset:
             request.add_header('Range', f'bytes={offset}-')
+        status(stage='connecting', received=offset, attempt=attempt+1, attempts=attempts)
         try:
-            with urllib.request.urlopen(request, timeout=45) as response:
-                status = response.status
-                if status == 206:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                code = response.status
+                if code == 206:
                     match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)', response.headers.get('Content-Range', ''))
                     if not match or int(match[1]) != offset or int(match[3]) != row['size']:
                         raise SetupError('服务器返回了不匹配的下载范围，请重试')
-                elif status == 200:
+                elif code == 200:
                     offset = 0  # Range ignored: start fresh, never append a second file.
                 else:
-                    raise SetupError(f'下载失败（HTTP {status}）')
+                    raise SetupError(f'下载失败（HTTP {code}）')
+                status(stage='transfer', received=offset, attempt=attempt+1, attempts=attempts)
+                progress(offset)
                 mode = 'ab' if offset else 'wb'
                 with partial.open(mode) as dest:
                     os.chmod(partial, 0o600)
                     received = offset
                     last = 0.0
                     while True:
-                        block = response.read(1024 * 1024)
+                        # Small chunks keep progress responsive on slow links.
+                        block = response.read(64 * 1024)
                         if not block:
                             break
                         received += len(block)
@@ -108,6 +136,7 @@ def fetch(url, target, row, progress=lambda amount: None, attempts=3):
                         if now - last > .2:
                             progress(received)
                             last = now
+            status(stage='verify', received=received, attempt=attempt+1, attempts=attempts)
             if not valid_file(partial, row):
                 if partial.stat().st_size == row['size']:
                     partial.unlink()  # Complete but corrupt bytes cannot be resumed.
@@ -115,9 +144,11 @@ def fetch(url, target, row, progress=lambda amount: None, attempts=3):
             os.replace(partial, target)
             progress(row['size'])
             return
-        except (OSError, urllib.error.URLError, SetupError) as error:
+        except (OSError, urllib.error.URLError, http.client.HTTPException, SetupError) as error:
             if attempt + 1 == attempts:
                 raise SetupError(f'{target.name}：{error}') from error
+            status(stage='retry', received=partial.stat().st_size if partial.exists() else 0,
+                   attempt=attempt+1, attempts=attempts, error=str(error))
             time.sleep(min(2 ** attempt, 4))
 
 
@@ -135,7 +166,9 @@ def atomic_json(path, value):
         temporary.unlink(missing_ok=True)
 
 
-def install(support, python, catalog, only='all', notify=emit):
+def install(support, python, catalog, only='all', notify=emit, source='official'):
+    if source not in SOURCES:
+        raise SetupError('不支持的模型下载来源')
     support.mkdir(parents=True, exist_ok=True, mode=0o700)
     config_path = support / 'config.json'
     try:
@@ -173,10 +206,29 @@ def install(support, python, catalog, only='all', notify=emit):
         if shutil.disk_usage(support).free < needed + 256 * 1024 * 1024:
             raise SetupError('磁盘空间不足，请释放空间后重试；已有模型未改动')
         for row in model['files']:
-            url = f"https://huggingface.co/{model['repo']}/resolve/{model['revision']}/{urllib.parse.quote(row['name'])}"
+            url = model_url(model, row['name'], source)
+            speed = {'bytes':0, 'time':time.monotonic(), 'rate':0.0}
             def update(amount):
-                notify(event='progress', stage='download', message=f"{model['title']} · {row['name']}", completed=completed + amount, total=total)
-            fetch(url, directory / row['name'], row, update)
+                now = time.monotonic()
+                elapsed, delta = now-speed['time'], amount-speed['bytes']
+                if delta > 0 and elapsed >= .2:
+                    measured = delta/elapsed
+                    speed['rate'] = measured if speed['rate'] == 0 else .3*measured + .7*speed['rate']
+                    speed['bytes'], speed['time'] = amount, now
+                elif delta < 0:
+                    speed.update(bytes=amount, time=now, rate=0.0)
+                notify(event='progress', stage='download', message=f"正在下载 {model['title']} · {row['name']}",
+                       source=SOURCES[source][0], completed=completed+amount, total=total,
+                       bytes_per_second=round(speed['rate']),
+                       eta_seconds=round((total-completed-amount)/speed['rate']) if speed['rate'] else None)
+            def phase(stage, received, attempt, attempts, **detail):
+                if stage in {'connecting', 'transfer'}:
+                    speed.update(bytes=received, time=time.monotonic(), rate=0.0)
+                if stage == 'transfer': return
+                verb = {'connecting':'正在连接', 'verify':'正在校验 SHA-256', 'retry':f'连接中断，准备第 {attempt+1}/{attempts} 次尝试'}[stage]
+                notify(event='progress', stage=stage, message=f"{verb} · {model['title']} · {row['name']}",
+                       source=SOURCES[source][0], completed=completed+received, total=total, **detail)
+            fetch(url, directory / row['name'], row, update, status=phase)
             completed += row['size']
         atomic_json(directory / 'freetalk-manifest.json', model)
         config[model['key']] = str(directory)
@@ -196,10 +248,11 @@ if __name__ == '__main__':
     parser.add_argument('--python', type=Path, required=True)
     parser.add_argument('--catalog', type=Path, default=Path(__file__).with_name('catalog.json'))
     parser.add_argument('--only', choices=['all', 'asrModel', 'cleanupModel'], default='all')
+    parser.add_argument('--source', choices=list(SOURCES), default='official')
     args = parser.parse_args()
     os.umask(0o077)
     try:
-        install(args.support, args.python, args.catalog, args.only)
+        install(args.support, args.python, args.catalog, args.only, source=args.source)
     except Exception as error:
         emit(event='error', message=str(error))
         raise SystemExit(1)

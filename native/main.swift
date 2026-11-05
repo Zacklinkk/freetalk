@@ -501,7 +501,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func beginModelDownload(only:String = "all") {
         guard phase == .idle, !inserter.busy else { setStatus("请先结束当前录音或处理，再下载模型。"); return }
-        modelSetup.start(config:config,only:only)
+        modelSetup.start(config:config,only:only,source:ModelDownloadSource.preferred)
     }
     @objc func showOnboarding() { onboarding.show() }
     @objc func showModels() {

@@ -1,11 +1,19 @@
 import Foundation
 
+enum ModelDownloadSource: String, CaseIterable {
+    case official, mirror
+    var title: String { self == .official ? "Hugging Face 官方" : "HF-Mirror（第三方镜像）" }
+    var endpoint: String { self == .official ? "https://huggingface.co" : "https://hf-mirror.com" }
+    static var preferred: Self { Self(rawValue:UserDefaults.standard.string(forKey:"modelDownloadSourceV1") ?? "") ?? .official }
+}
+
 struct DownloadModel: Decodable {
     struct File: Decodable { let name: String; let size: Int64; let sha256: String }
     let key: String, name: String, title: String, repo: String, revision: String, license: String
     let bits: Int
     let bytes: Int64
     let files: [File]
+    func pageURL(source: ModelDownloadSource) -> URL? { URL(string:"\(source.endpoint)/\(repo)/tree/\(revision)") }
     func filesPresent(config: [String: Any]) -> Bool {
         guard let path = config[key] as? String else { return false }
         return files.allSatisfy { file in
@@ -25,9 +33,26 @@ final class ModelSetup {
     private(set) var busy = false
     private(set) var message = "下载一次，之后离线使用。"
     private(set) var fraction: Double?
+    private var byteProgress = "", transferProgress = ""
+    var progressText: String {
+        // A stopped or stalled transfer must not keep advertising its last speed.
+        byteProgress + (busy && !failed && Date().timeIntervalSince(lastEvent) < 8 ? transferProgress : "")
+    }
     private(set) var failed = false
     private var process: Process?
     private var cancelled = false
+    private var ticker: Timer?
+    private var started = Date(), lastEvent = Date()
+    private var stage = ""
+    var activityText: String {
+        guard busy else { return "" }
+        let elapsed = Int(Date().timeIntervalSince(started)), quiet = Int(Date().timeIntervalSince(lastEvent))
+        let elapsedText = elapsed < 60 ? "已进行 \(elapsed) 秒" : "已进行 \(elapsed/60) 分 \(elapsed%60) 秒"
+        if quiet >= 8 && ["download","connecting","retry"].contains(stage) {
+            return elapsedText + " · \(quiet) 秒未收到新进度，正在等待网络响应；可取消后切换来源。"
+        }
+        return elapsedText + (stage == "runtime" ? " · 正在准备运行环境，当前阶段没有可用的总字节数。" : "")
+    }
     init(support: URL, resources: URL) {
         self.support = support; self.resources = resources
         let data = try? Data(contentsOf: resources.appendingPathComponent("setup/catalog.json"))
@@ -43,12 +68,12 @@ final class ModelSetup {
             }
         }
     }
-    func start(config: [String: Any], only: String = "all") {
+    func start(config: [String: Any], only: String = "all", source: ModelDownloadSource = .official) {
         guard !busy, ["all","asrModel","cleanupModel"].contains(only) else { return }
         guard !models.isEmpty else { message = "安装包缺少模型清单，请重新构建。"; failed = true; onChange?(); return }
         let task = Process(), output = Pipe()
         task.executableURL = URL(fileURLWithPath: "/bin/bash")
-        task.arguments = [resources.appendingPathComponent("setup/bootstrap.sh").path, support.path, config["python"] as? String ?? "", only]
+        task.arguments = [resources.appendingPathComponent("setup/bootstrap.sh").path, support.path, config["python"] as? String ?? "", only, source.rawValue]
         var env = ProcessInfo.processInfo.environment
         for key in ["HF_TOKEN","HUGGING_FACE_HUB_TOKEN","HF_ENDPOINT","PYTHONPATH","PYTHONHOME","VIRTUAL_ENV","UV_INDEX_URL","UV_EXTRA_INDEX_URL","PIP_INDEX_URL","PIP_EXTRA_INDEX_URL"] { env.removeValue(forKey:key) }
         env["PYTHONDONTWRITEBYTECODE"] = "1"; env["HF_HUB_OFFLINE"] = "0"; env["TRANSFORMERS_OFFLINE"] = "0"
@@ -61,7 +86,10 @@ final class ModelSetup {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: log.path)
             task.standardError = try FileHandle(forWritingTo: log)
             try task.run()
-            process = task; busy = true; failed = false; cancelled = false; fraction = nil; message = "正在检查运行环境…"; onChange?()
+            process = task; busy = true; failed = false; cancelled = false; fraction = nil; byteProgress = ""; transferProgress = ""
+            started = Date(); lastEvent = started; stage = "runtime"; message = "正在检查运行环境…"
+            ticker?.invalidate(); ticker = Timer.scheduledTimer(withTimeInterval:1,repeats:true) { [weak self] _ in self?.onChange?() }
+            onChange?()
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 var buffer = Data()
                 let reader = output.fileHandleForReading
@@ -79,31 +107,40 @@ final class ModelSetup {
                 task.waitUntilExit()
                 DispatchQueue.main.async {
                     guard let self = self else { return }
-                    self.process = nil; self.busy = false
+                    self.process = nil; self.busy = false; self.ticker?.invalidate(); self.ticker = nil
                     if self.cancelled { self.message = "已取消。已下载的模型片段会在重试时继续。"; self.fraction = nil }
                     else if task.terminationStatus == 0 { self.message = "文件校验完成，正在加载本地模型…"; self.fraction = 1; self.onComplete?() }
-                    else { self.failed = true; if !self.message.hasPrefix("下载失败") { self.message = "下载未完成。请检查网络或可用空间后重试；详情在 setup.log。" } }
+                    else { self.failed = true; if !self.message.hasPrefix("下载失败") { self.message = "下载未完成。请查看下载日志；模型连接失败时可切换官方源或镜像后重试。" } }
                     self.onChange?()
                 }
             }
         } catch { message = "无法开始下载：\(error.localizedDescription)"; failed = true; onChange?() }
     }
     private func receive(_ event: [String: Any]) {
+        lastEvent = Date(); stage = event["stage"] as? String ?? stage
+        transferProgress = ""
         if let text = event["message"] as? String { message = text }
         if event["event"] as? String == "error" { message = "下载失败：\(message)"; failed = true }
-        if let completed = event["completed"] as? Double, let total = event["total"] as? Double, total > 0 {
+        if let completed = event["completed"] as? Double, let total = event["total"] as? Double, total > 0,
+           completed.isFinite, total.isFinite, completed >= 0, total < Double(Int64.max/2) {
             fraction = min(1,max(0,completed/total))
-            if event["stage"] as? String == "download" {
-                let format = ByteCountFormatter(); format.countStyle = .file
-                message += "\n\(format.string(fromByteCount:Int64(completed))) / \(format.string(fromByteCount:Int64(total)))"
+            let format = ByteCountFormatter(); format.countStyle = .file
+            byteProgress = String(format:"%.1f%%",fraction!*100) + " · \(format.string(fromByteCount:Int64(min(completed,total)))) / \(format.string(fromByteCount:Int64(total)))"
+            if stage == "download", let speed = event["bytes_per_second"] as? Double, speed.isFinite, speed > 0, speed < Double(Int64.max/2) {
+                transferProgress += " · \(format.string(fromByteCount:Int64(speed)))/s"
+                if let eta = event["eta_seconds"] as? Double, eta.isFinite, eta > 0, eta < 86400*365 {
+                    let seconds = Int(eta)
+                    transferProgress += seconds < 60 ? " · 预计剩余 \(seconds) 秒" : " · 预计剩余 \(seconds/60) 分钟"
+                }
             }
-        } else { fraction = nil }
+        } else if event["event"] as? String != "error" { fraction = nil; byteProgress = "" }
         onChange?()
     }
     func cancel() {
         guard busy else { return }
         cancelled = true; message = "正在取消…"; onChange?(); process?.terminate()
     }
+    deinit { ticker?.invalidate() }
 }
 
 enum LegacyMigration {
