@@ -192,6 +192,22 @@ class Editor:
 
 class Engine:
     def __init__(self, config, emit=lambda value: None):
+        import fcntl
+        lock_path = config.get('inferenceLockPath')
+        if lock_path:
+            self.inference_lock = open(lock_path, 'a')
+            deadline = time.monotonic() + 3
+            while True:
+                try:
+                    fcntl.flock(self.inference_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    # A native reload terminates the old worker asynchronously.
+                    # Allow its final Metal teardown to release the same lock.
+                    if time.monotonic() >= deadline:
+                        self.inference_lock.close()
+                        raise RuntimeError('另一个本地推理任务正在运行，请等待完成后重新加载模型。') from None
+                    time.sleep(.05)
         import mlx.core as mx
         import numpy as np
         from mlx_audio.stt.utils import load_model

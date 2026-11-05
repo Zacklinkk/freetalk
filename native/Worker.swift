@@ -14,6 +14,7 @@ final class VoiceWorker {
     var onState: ((String, Bool) -> Void)?
     var onPartial: ((String) -> Void)?
     var onStage: ((String) -> Void)?
+    var onMeetingProgress: (([String: Any]) -> Void)?
 
     func start(config: [String: Any], resource: URL, support: URL) {
         stop()
@@ -56,7 +57,9 @@ final class VoiceWorker {
         }
         do {
             try task.run(); process = task; writer = input.fileHandleForWriting
-            write(config)
+            var startupConfig = config
+            startupConfig["inferenceLockPath"] = support.appendingPathComponent("inference.lock").path
+            write(startupConfig)
             onState?("正在加载本地模型…", false)
             watchdog = Timer.scheduledTimer(withTimeInterval: 90, repeats: false) { [weak self] _ in
                 guard let self = self, self.generation == token, !self.ready else { return }
@@ -66,6 +69,7 @@ final class VoiceWorker {
     }
 
     private func receive(_ item: [String: Any]) {
+        if item["event"] as? String == "meeting-progress" { onMeetingProgress?(item) }
         if item["event"] as? String == "ready" { ready = true; watchdog?.invalidate(); onState?("本地模型已就绪", true) }
         if item["event"] as? String == "partial", let text = item["text"] as? String { onPartial?(text) }
         if item["event"] as? String == "model-request", let stage = item["stage"] as? String { onStage?(stage) }

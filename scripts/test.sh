@@ -24,5 +24,6 @@ native_test CorrectionsTests native/Corrections.swift native/Vocabulary.swift na
 native_test SetupMigrationTests native/ModelSetup.swift
 native_test SetupProcessTests native/ModelSetup.swift
 native_test PermissionTests native/Permissions.swift
+native_test MeetingAudioTests native/MeetingAudio.swift native/Audio.swift
 sparkle_dir="$(bash scripts/prepare-sparkle.sh)"
 native_test UpdaterTests native/AppUpdater.swift -F "$sparkle_dir" -framework Sparkle -Xlinker -rpath -Xlinker "$sparkle_dir"

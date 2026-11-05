@@ -28,11 +28,15 @@ def main():
                 result = engine.push(base64.b64decode(command["pcm"], validate=True))
             elif action == "finish":
                 result = engine.finish()
+            elif action == 'meeting':
+                from meeting_pipeline import run_meeting
+                result = run_meeting(config, command, engine=engine, emit=emit)
             else:
                 raise ValueError("Unknown action")
             emit({"id": command["id"], "result": result})
         except Exception as exc:
-            traceback.print_exc(file=sys.stderr)
+            if command.get('action') != 'meeting':
+                traceback.print_exc(file=sys.stderr)
             emit({"id": command["id"], "error": str(exc)})
 
 

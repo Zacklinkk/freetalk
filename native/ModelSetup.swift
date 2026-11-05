@@ -53,9 +53,9 @@ final class ModelSetup {
         }
         return elapsedText + (stage == "runtime" ? " · 正在准备运行环境，当前阶段没有可用的总字节数。" : "")
     }
-    init(support: URL, resources: URL) {
+    init(support: URL, resources: URL, catalogName: String = "catalog.json") {
         self.support = support; self.resources = resources
-        let data = try? Data(contentsOf: resources.appendingPathComponent("setup/catalog.json"))
+        let data = try? Data(contentsOf: resources.appendingPathComponent("setup/\(catalogName)"))
         models = data.flatMap { try? JSONDecoder().decode(Catalog.self, from: $0).models } ?? []
     }
     static func configured(_ config: [String: Any]) -> Bool {
@@ -69,7 +69,7 @@ final class ModelSetup {
         }
     }
     func start(config: [String: Any], only: String = "all", source: ModelDownloadSource = .official) {
-        guard !busy, ["all","asrModel","cleanupModel"].contains(only) else { return }
+        guard !busy, only == "all" || models.contains(where: { $0.key == only }) else { return }
         guard !models.isEmpty else { message = "安装包缺少模型清单，请重新构建。"; failed = true; onChange?(); return }
         let task = Process(), output = Pipe()
         task.executableURL = URL(fileURLWithPath: "/bin/bash")

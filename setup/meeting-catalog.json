@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "models": [
+    {
+      "key": "meetingDiarizationModel",
+      "name": "Nemotron-3-Diarization-8bit",
+      "title": "会议说话人区分（最多 8 人）",
+      "repo": "mlx-community/Nemotron-3-Diarization-8bit",
+      "revision": "dd8b8ce3d69a80540a7e50150e2beed1c34fee37",
+      "bits": 8,
+      "license": "OpenMDW-1.1",
+      "bytes": 106615594,
+      "files": [
+        {
+          "name": "config.json",
+          "size": 1694,
+          "sha256": "3bf7cf46b3d889ceac701c59d4821bbc64926a1d86bd875f3b2b532de8f2da95"
+        },
+        {
+          "name": "model.safetensors",
+          "size": 106613900,
+          "sha256": "8b09366e0e4f52370065c88b1d0d5b9a4fa73f686d989495418a2c5cfe39ab07"
+        }
+      ]
+    }
+  ]
+}

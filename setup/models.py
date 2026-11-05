@@ -66,7 +66,7 @@ def load_catalog(path):
         raise SetupError('模型清单版本不受支持')
     seen = set()
     for model in catalog['models']:
-        if model['key'] not in {'asrModel', 'cleanupModel'} or not re.fullmatch(r'[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+', model['repo']):
+        if model['key'] not in {'asrModel', 'cleanupModel', 'meetingDiarizationModel'} or not re.fullmatch(r'[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+', model['repo']):
             raise SetupError('模型来源无效')
         if not re.fullmatch(r'[0-9a-f]{40}', model['revision']):
             raise SetupError('模型版本未固定')
@@ -247,7 +247,7 @@ if __name__ == '__main__':
     parser.add_argument('--support', type=Path, required=True)
     parser.add_argument('--python', type=Path, required=True)
     parser.add_argument('--catalog', type=Path, default=Path(__file__).with_name('catalog.json'))
-    parser.add_argument('--only', choices=['all', 'asrModel', 'cleanupModel'], default='all')
+    parser.add_argument('--only', choices=['all', 'asrModel', 'cleanupModel', 'meetingDiarizationModel'], default='all')
     parser.add_argument('--source', choices=list(SOURCES), default='official')
     args = parser.parse_args()
     os.umask(0o077)

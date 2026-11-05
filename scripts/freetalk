@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+task_script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+task_support=${FREETALK_SUPPORT_DIR:-"$HOME/Library/Application Support/freetalk"}
+task_python=${FREETALK_PYTHON:-}
+if [ -z "$task_python" ] && [ -f "$task_support/config.json" ]; then
+  task_python=$(/usr/bin/plutil -extract python raw -o - "$task_support/config.json" 2>/dev/null || true)
+fi
+if [ -z "$task_python" ]; then task_python=$(command -v python3 || true); fi
+if [ -z "$task_python" ]; then printf '%s\n' '请先在 freetalk 中准备本地运行环境。' >&2; exit 1; fi
+if [ -f "$task_script_dir/../Resources/python/meeting_cli.py" ]; then
+  task_entry="$task_script_dir/../Resources/python/meeting_cli.py"
+else
+  task_entry="$task_script_dir/../python/meeting_cli.py"
+fi
+export PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+exec "$task_python" "$task_entry" --support "$task_support" "$@"

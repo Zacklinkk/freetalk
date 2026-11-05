@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var historyStore = VoiceHistoryStore(directory: support)
     lazy var historyWindow = HistoryWindow(store: historyStore)
     var recentHistoryView: RecentHistoryView?
+    lazy var meetings = MeetingController(app:self)
+    var meetingView: MeetingView?
     lazy var vocabularyStore = VocabularyStore(directory: support)
     lazy var vocabularyWindow = VocabularyWindow(store: vocabularyStore)
     lazy var correctionStore = CorrectionStore(directory: support, vocabulary: vocabularyStore)
@@ -97,9 +99,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         _ = historyStore
         createMenu(); createWindow(); refreshDevices()
+        meetings.connect()
         appUpdater.canInstall = { [weak self] in
             guard let self = self else { return false }
-            return self.phase == .idle && !self.inserter.busy && !self.modelSetup.busy
+            return self.phase == .idle && !self.inserter.busy && !self.modelSetup.busy && !self.meetings.busy
         }
         appUpdater.onChange = { [weak self] in self?.refreshUI() }
         appUpdater.onFocus = { [weak self] in self?.showUpdates() }
@@ -108,6 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         modelSetup.onComplete = { [weak self] in self?.reloadModel() }
         deviceMonitor.onChange = { [weak self] in
             guard let self = self else { return }
+            self.meetings.checkDevice()
             if self.phase == .idle { self.refreshDevices() }
             else if let device = self.recordingDevice, !MicDevices.all().contains(where: { $0.uid == device.uid }) {
                 self.preparedDeviceKey = nil; self.preparationRequest = UUID()
@@ -202,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordMenu = NSMenuItem(title: "开始录音", action: #selector(menuToggle), keyEquivalent: ""); recordMenu.target = self; menu.addItem(recordMenu)
         let cancel = NSMenuItem(title: "取消录音 / 处理", action: #selector(cancelAction), keyEquivalent: ""); cancel.target = self; menu.addItem(cancel)
         menu.addItem(.separator())
-        for (title, action) in [("设置与最近结果…", #selector(showWindow)), ("软件更新…",#selector(showUpdates)), ("首次使用引导…",#selector(showOnboarding)), ("权限设置引导…",#selector(showPermissionGuide)), ("下载本地模型…",#selector(showModels)), ("个人词库…", #selector(showVocabulary)), ("转写历史（最多500条）…", #selector(showHistory)), ("复制最近结果", #selector(copyResult)), ("重新加载模型", #selector(reloadModel)), ("退出 freetalk", #selector(quit))] {
+        for (title, action) in [("设置与最近结果…", #selector(showWindow)), ("会议资料…",#selector(showMeetings)), ("软件更新…",#selector(showUpdates)), ("首次使用引导…",#selector(showOnboarding)), ("权限设置引导…",#selector(showPermissionGuide)), ("下载本地模型…",#selector(showModels)), ("个人词库…", #selector(showVocabulary)), ("转写历史（最多500条）…", #selector(showHistory)), ("复制最近结果", #selector(copyResult)), ("重新加载模型", #selector(reloadModel)), ("退出 freetalk", #selector(quit))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
         statusItem.menu = menu
@@ -224,9 +228,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let recording = phase == .recording
         recordButton?.title = recording ? "停止并转写" : phase == .preparing ? "取消启动" : "开始录音"
         recordMenu?.title = recordButton?.title ?? "开始录音"
-        recordButton?.isEnabled = !appUpdater.installing && (recording || phase == .preparing || (phase == .idle && worker.ready && !inserter.busy && !modelSetup.busy))
+        recordButton?.isEnabled = !appUpdater.installing && !meetings.busy && (recording || phase == .preparing || (phase == .idle && worker.ready && !inserter.busy && !modelSetup.busy))
         recordMenu?.isEnabled = recordButton?.isEnabled ?? false
-        micPicker?.isEnabled = phase == .idle
+        micPicker?.isEnabled = phase == .idle && !meetings.busy
         let icon = recording ? "stop.circle.fill" : (phase == .processing ? "ellipsis.circle" : (worker.ready ? "mic" : "mic.slash"))
         statusItem?.button?.image = NSImage(systemSymbolName: icon, accessibilityDescription: "freetalk：\(statusText)")
         statusItem?.button?.contentTintColor = recording ? .systemRed : nil
@@ -241,6 +245,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshPermissions()
         modelSetupView?.refresh()
         appUpdateView?.refresh()
+        meetingView?.refreshState()
+        if meetings.recording || meetings.preparing { statusItem?.button?.title = " 会议录音"; statusItem?.button?.contentTintColor = .systemRed }
+        else if meetings.processing { statusItem?.button?.title = " 会议整理" }
         if sidebarButtons.count > 4 { sidebarButtons[4].title = appUpdater.hasUpdate ? "软件更新 · 有更新" : "软件更新" }
     }
     func refreshPermissions() {
@@ -287,7 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         prepareSelectedDevice()
     }
     func prepareSelectedDevice(force: Bool = false) {
-        guard phase == .idle, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
+        guard phase == .idle, !meetings.busy, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
         let uid = UserDefaults.standard.bool(forKey: "micFollowSystem") ? nil : UserDefaults.standard.string(forKey: "micUID")
         guard let device = MicDevices.selected(uid: uid, devices: deviceList) else { preparedDeviceKey = nil; preparationRequest = UUID(); return }
         let key = "\(device.uid):\(device.id)"
@@ -334,7 +341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func recheckPermissions() { updateHotkey(); prepareSelectedDevice(); refreshPermissions() }
     @objc func revealApplication() { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
     @objc func delayedStart() {
-        guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !appUpdater.installing else { return }
+        guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !meetings.busy, !appUpdater.installing else { return }
         phase = .preparing; session = UUID(); let token = session
         setStatus("5秒后录音，请切回目标输入框并放好光标")
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
@@ -356,6 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func menuToggle() { DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.toggle() } }
     @objc func toggle() {
+        guard !meetings.busy else { showMeetings(); return }
         if phase == .recording { stopRecording(); return }
         if phase == .preparing { cancelRecording(reload:false); return }
         guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !appUpdater.installing else { return }
@@ -505,9 +513,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setStatus("已取消，未插入文字")
     }
     @objc func cancelAction() { cancelRecording() }
-    @objc func sleeping() { cancelRecording() }
+    @objc func sleeping() { cancelRecording(); if meetings.recording || meetings.preparing { meetings.stopRecording(process:false) } }
     @objc func wokeUp() { if phase == .idle { refreshDevices(); prepareSelectedDevice(force: true) } }
     @objc func audioChanged() {
+        meetings.checkAudio()
         // The engine also announces the intentional device selection at startup.
         // An actual route loss stops the engine; don't cancel a healthy start.
         if phase == .recording { recorder.checkRunning { [weak self] active in
@@ -516,7 +525,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } }
     }
     @objc func reloadModel() {
-        guard phase == .idle, !modelSetup.busy else { return }
+        guard phase == .idle, !modelSetup.busy, !meetings.busy else { return }
         if let data = try? Data(contentsOf: support.appendingPathComponent("config.json")),
            let settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { config = settings }
         guard ModelSetup.configured(config) else {
@@ -525,7 +534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let resource = Bundle.main.resourceURL { worker.start(config: config, resource: resource, support: support) }
     }
     func beginModelDownload(only:String = "all") {
-        guard phase == .idle, !inserter.busy, !appUpdater.installing else { setStatus("请先结束当前操作，再下载模型。"); return }
+        guard phase == .idle, !inserter.busy, !meetings.busy, !appUpdater.installing else { setStatus("请先结束当前操作，再下载模型。"); return }
         modelSetup.start(config:config,only:only,source:ModelDownloadSource.preferred)
     }
     @objc func showOnboarding() { onboarding.show() }
@@ -537,6 +546,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func showModels() {
         showWindow(); settingsTabs.selectTabViewItem(at:3)
         for (index,button) in sidebarButtons.enumerated() { button.state = index == 3 ? .on : .off }
+    }
+    @objc func showMeetings() {
+        showWindow(); settingsTabs.selectTabViewItem(at:5); meetingView?.refreshEntries()
+        for (index,button) in sidebarButtons.enumerated() { button.state = index == 5 ? .on : .off }
     }
     @objc func openModelStorage() { NSWorkspace.shared.open(support) }
     func saveResult() {
@@ -566,7 +579,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func showRaw() { resultView.string = resultView.string == lastRaw ? lastText : lastRaw }
     @objc func clearResult() { lastText = ""; lastRaw = ""; resultView.string = ""; try? FileManager.default.removeItem(at: support.appendingPathComponent("last-result.json")); setStatus("已清除最近显示，历史记录仍保留") }
     @objc func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); refreshUI() }
-    @objc func quit() { NSApp.terminate(nil) }
+    @objc func quit() { if meetings.busy { showMeetings(); return }; NSApp.terminate(nil) }
     func menuWillOpen(_ menu: NSMenu) { refreshUI() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(); return true }

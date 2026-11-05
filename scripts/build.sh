@@ -9,7 +9,7 @@ mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 swiftc -swift-version 5 -O -target "arm64-apple-macos$deployment_target" \
   "$project_dir"/native/*.swift \
   -framework AppKit -framework AVFoundation -framework ApplicationServices \
-  -framework Carbon -framework CoreAudio -framework AudioToolbox -framework NaturalLanguage \
+  -framework Carbon -framework CoreAudio -framework AudioToolbox -framework NaturalLanguage -framework Security -framework WebKit \
   -F "$sparkle_dir" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   -o "$app_dir/Contents/MacOS/freetalk"
 cp "$project_dir/native/Info.plist" "$app_dir/Contents/Info.plist"
@@ -34,6 +34,11 @@ fi
 ditto "$project_dir/python" "$app_dir/Contents/Resources/python"
 ditto "$project_dir/prompts" "$app_dir/Contents/Resources/prompts"
 ditto "$project_dir/setup" "$app_dir/Contents/Resources/setup"
+ditto "$project_dir/integrations" "$app_dir/Contents/Resources/integrations"
+rm -f "$app_dir/Contents/MacOS/freetalk-cli"
+mkdir -p "$app_dir/Contents/Resources/bin"
+cp "$project_dir/scripts/freetalk" "$app_dir/Contents/Resources/bin/freetalk"
+chmod +x "$app_dir/Contents/Resources/bin/freetalk"
 mkdir -p "$app_dir/Contents/Resources/Licenses"
 cp "$sparkle_dir/LICENSE" "$app_dir/Contents/Resources/Licenses/Sparkle.txt"
 swift "$project_dir/scripts/make-icon.swift" "$project_dir/build/AppIcon.iconset"

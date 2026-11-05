@@ -33,14 +33,14 @@ extension AppDelegate {
         let brand = label("freetalk", size: 19); nav.addArrangedSubview(brand)
         let tagline = label("你的本地语音输入", size: 11, color: .secondaryLabelColor); nav.addArrangedSubview(tagline)
         nav.setCustomSpacing(24, after: tagline)
-        for (index, entry) in [("语音输入","mic"),("最近转写","text.bubble"),("常用词与学习","character.book.closed"),("本地模型","cpu"),("软件更新","arrow.triangle.2.circlepath")].enumerated() {
+        for (index, entry) in [("语音输入","mic"),("最近转写","text.bubble"),("常用词与学习","character.book.closed"),("本地模型","cpu"),("软件更新","arrow.triangle.2.circlepath"),("会议资料","person.3.sequence")].enumerated() {
             let item = NSButton(title: entry.0, target: self, action: #selector(selectSettingsPage(_:)))
             item.image = NSImage(systemSymbolName: entry.1, accessibilityDescription: nil); item.imagePosition = .imageLeading; item.imageHugsTitle = true
             item.bezelStyle = .recessed; item.setButtonType(.pushOnPushOff); item.alignment = .left; item.tag = index
             item.font = .systemFont(ofSize: 13, weight: .medium); nav.addArrangedSubview(item); item.widthAnchor.constraint(equalTo: nav.widthAnchor).isActive = true
             item.heightAnchor.constraint(equalToConstant: 36).isActive = true; sidebarButtons.append(item)
         }
-        let footer = label("完全在这台 Mac 上处理\n轻按右 Option 开始录音", size: 11, color: .secondaryLabelColor)
+        let footer = label("语音输入默认离线\n会议增强由你选择", size: 11, color: .secondaryLabelColor)
         footer.translatesAutoresizingMaskIntoConstraints = false; sidebar.addSubview(footer)
         NSLayoutConstraint.activate([footer.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 18), footer.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -14), footer.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -22)])
 
@@ -92,12 +92,15 @@ extension AppDelegate {
             card("运行状态",views:[modelLabel,row([button("重新加载模型",#selector(reloadModel)),button("打开本地文件夹",#selector(openModelStorage)),button("首次使用引导…",#selector(showOnboarding))]),label("模型常驻内存预算上限5 GiB，与磁盘大小不同。建议16 GB内存。\n音频不保存，转写历史和个人词库仅在本机。",size:12,color:.secondaryLabelColor)])]))
         let updates = AppUpdateView(app:self); appUpdateView = updates
         addSettingsPage(settingsPage("软件更新",subtitle:"有新版时在这里提醒，由你决定何时更新。",cards:[updates]))
+        let meeting = MeetingView(app:self); meetingView = meeting
+        addSettingsPage(settingsPage("会议资料",subtitle:"把讨论变成可回溯的原稿、纪要与脑图。",cards:[meeting],fillsHeight:true))
         sidebarButtons[0].state = .on; settingsTabs.selectTabViewItem(at:0); refreshUI()
     }
     private func addSettingsPage(_ page: NSView) { let item = NSTabViewItem(); item.view = page; settingsTabs.addTabViewItem(item) }
     @objc func selectSettingsPage(_ button: NSButton) {
         settingsTabs.selectTabViewItem(at:button.tag)
         if button.tag == 1 { recentHistoryView?.refresh() }
+        if button.tag == 5 { meetingView?.refreshEntries() }
         for entry in sidebarButtons { entry.state = entry === button ? .on : .off }
     }
 }

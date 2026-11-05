@@ -6,7 +6,7 @@
 
 在 Mac 的输入框放好光标，轻按右 Option，说完再按一次。freetalk 在本机识别语音、整理口述，然后把文字填回草稿，由你检查和发送。
 
-Local speech-to-text and faithful dictation cleanup for Apple Silicon Macs. No account, API key, or cloud inference.
+Local speech-to-text and faithful dictation cleanup for Apple Silicon Macs. Optional meeting transcripts, minutes and mind maps, with local processing or an explicitly configured cloud summary provider.
 
 > 实验性版本。优先面向中文与中英混合口述；整理与专名识别仍可能出错，请检查输出。
 
@@ -22,6 +22,7 @@ Local speech-to-text and faithful dictation cleanup for Apple Silicon Macs. No a
 - 首次使用引导：逐项授权 → 准备模型 → 真实试说。原稿与整理结果对应，最近 10 次试说可回看，退出应用即清除；不写入其他应用或普通历史。
 - 在应用内下载本地模型和独立运行环境，支持官方源 / HF-Mirror 切换、源链接、百分比与下载速度、取消、续传、重试及文件校验。
 - 设置页提示新版本，点击后下载更新，显示进度并支持取消；下载校验完成后可安装并重启。
+- 可选「会议资料」：导入录音或长时间麦克风录音，生成带时间戳的原稿、纪要、可展开脑图，以及 CLI / skill 可读取的结构化资料。复用本地模型，额外说话人模型约 107 MB；开启后才下载，云端增强另行配置。[使用与边界](docs/meetings.md)
 
 ## 安装
 
@@ -74,7 +75,7 @@ open "$HOME/Applications/freetalk.app"
 | 语音识别 | [Qwen3-ASR-0.6B](https://huggingface.co/mlx-community/Qwen3-ASR-0.6B-8bit) | MLX 8bit | 约 1.01 GB |
 | 文字整理 | [Qwen3-4B-Instruct-2507](https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit) | MLX 4bit | 约 2.28 GB |
 
-两者都在本机通过 MLX 运行。下载量合计约 3.29 GB，不含独立 Python 和依赖，也不等于实际内存占用。模型单独遵循 Apache 2.0 许可，仓库不包含模型权重。
+两者都在本机通过 MLX 运行。下载量合计约 3.29 GB，不含独立 Python 和依赖，也不等于实际内存占用。模型单独遵循 Apache 2.0 许可，仓库不包含模型权重。会议说话人区分使用独立、按需下载的 Nemotron-3-Diarization-8bit（OpenMDW 1.1，约 107 MB，最多 8 个匿名说话人）。
 
 模型版本和逐文件 SHA-256 固定在 [模型清单](setup/catalog.json)。下载完成且校验成功后才更新配置；取消或失败保留原配置和可继续下载的片段。Python 依赖也固定版本与哈希。详见 [模型安装说明](docs/model-setup.md)。
 
@@ -82,7 +83,9 @@ open "$HOME/Applications/freetalk.app"
 
 ## 隐私与输入安全
 
-音频仅在内存中处理。运行时不调用云端推理、不监听网络端口。需要的上下文仅来自开始录音时的当前输入框，最多开头 500 字和光标附近 1,000 字，可在设置中关闭。
+普通语音输入的音频仅在内存中处理，不调用云端推理。需要的上下文仅来自开始录音时的当前输入框，最多开头 500 字和光标附近 1,000 字，可在设置中关闭。
+
+可选会议功能会临时保存本机录音以支持长录音和失败恢复；成功后按用户设置保留或删除。会议纪要默认本地生成，明确选择云端时才发送转写文字，密钥保存在 macOS 钥匙串。CLI 提供进程接口，不监听网络端口。详见[会议数据与配置](docs/meetings.md)。
 
 插入前会再次确认应用、输入框、原有草稿与选区。如果用户已经切换位置、修改草稿，或应用无法提供足够信息，结果留在历史中供复制，不会盲目输入。粘贴使用临时剪贴板并尽量恢复之前的内容。
 
