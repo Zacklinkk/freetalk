@@ -169,11 +169,12 @@ class ModelSetupTests(unittest.TestCase):
     def test_existing_verified_model_is_reused_without_network(self):
         model = self.root / 'existing'; model.mkdir()
         (model/self.row['name']).write_bytes(self.data)
-        (self.root/'config.json').write_text(json.dumps({'asrModel': str(model), 'cleanupTimeoutSeconds': 9}))
+        (self.root/'config.json').write_text(json.dumps({'asrModel': str(model), 'cleanupTimeoutSeconds': 9, 'maxRecordingSeconds': 90}))
         with patch.object(setup, 'fetch', side_effect=AssertionError('unexpected network')):
             config = setup.install(self.root, Path('/new/python'), self.catalog(), notify=lambda **_: None)
         self.assertEqual(config['asrModel'], str(model))
         self.assertEqual(config['cleanupTimeoutSeconds'], 9)
+        self.assertEqual(config['maxRecordingSeconds'], 90)
         self.assertEqual((self.root/'config.json').stat().st_mode & 0o777, 0o600)
 
     def test_corrupt_config_is_not_overwritten(self):
@@ -181,6 +182,14 @@ class ModelSetupTests(unittest.TestCase):
         with self.assertRaises(setup.SetupError):
             setup.install(self.root, Path('/new/python'), self.catalog(), notify=lambda **_: None)
         self.assertEqual(config.read_text(), '{broken')
+
+    def test_missing_duration_uses_three_minute_default(self):
+        model = self.root / 'existing'; model.mkdir()
+        (model/self.row['name']).write_bytes(self.data)
+        (self.root/'config.json').write_text(json.dumps({'asrModel': str(model)}))
+        with patch.object(setup, 'fetch', side_effect=AssertionError('unexpected network')):
+            config = setup.install(self.root, Path('/new/python'), self.catalog(), notify=lambda **_: None)
+        self.assertEqual(config['maxRecordingSeconds'], 180)
 
     def test_catalog_rejects_unsafe_model_name_and_wrong_total(self):
         for key, value in [('name', '../outside'), ('bytes', 1)]:

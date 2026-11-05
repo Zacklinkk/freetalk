@@ -1,5 +1,7 @@
 import AppKit
 
+private final class SettingsDocument: NSView { override var isFlipped: Bool { true } }
+
 extension AppDelegate {
     func card(_ title: String, _ subtitle: String? = nil, views: [NSView]) -> NSView {
         let box = VoiceAppearance.card()
@@ -9,13 +11,20 @@ extension AppDelegate {
         for view in views { stack.addArrangedSubview(view) }
         box.contentView = stack; return box
     }
-    func settingsPage(_ title: String, subtitle: String, cards: [NSView], fillsHeight: Bool = false) -> NSView {
-        let page = NSView(), stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
+    func settingsPage(_ title: String, subtitle: String, cards: [NSView], fillsHeight: Bool = false, scrollable: Bool = false) -> NSView {
+        let page: NSView = scrollable ? SettingsDocument() : NSView()
+        let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false; page.addSubview(stack)
         NSLayoutConstraint.activate([stack.topAnchor.constraint(equalTo: page.topAnchor, constant: 20), stack.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 26), stack.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -26), stack.bottomAnchor.constraint(lessThanOrEqualTo: page.bottomAnchor, constant: -20)])
-        if fillsHeight { stack.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -20).isActive = true }
+        if fillsHeight || scrollable { stack.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -20).isActive = true }
         stack.addArrangedSubview(label(title, size: 24)); stack.addArrangedSubview(label(subtitle, color: .secondaryLabelColor))
         for card in cards { stack.addArrangedSubview(card); card.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+        if scrollable {
+            let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.drawsBackground = false
+            page.translatesAutoresizingMaskIntoConstraints = false; scroll.documentView = page
+            page.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
+            return scroll
+        }
         return page
     }
     func createWindow() {
@@ -47,6 +56,9 @@ extension AppDelegate {
         statusLabel = label(statusText, size: 14)
         recordButton = button("开始录音", #selector(toggle)); recordButton.bezelStyle = .rounded; recordButton.contentTintColor = .controlAccentColor
         let statusCard = card("准备好时，随时开口", views: [statusLabel, row([recordButton,button("5秒后录音",#selector(delayedStart)),button("取消",#selector(cancelAction))])])
+        let limit = RecordingLimitView(legacy: { [weak self] in self?.config["maxRecordingSeconds"] }); recordingLimitView = limit
+        let limitCard = card("录音时长", views: [limit])
+        if let container = limit.superview { limit.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true }
         micPicker = NSPopUpButton(); micPicker.target = self; micPicker.action = #selector(deviceChanged); micPicker.setAccessibilityLabel("录音麦克风")
         micPicker.widthAnchor.constraint(lessThanOrEqualToConstant: 550).isActive = true
         deviceInfoLabel = label("", size: 12, color: .secondaryLabelColor); startupLabel = label("结束录音后自动关闭麦克风", size: 12, color: .secondaryLabelColor)
@@ -62,7 +74,7 @@ extension AppDelegate {
         let cleanupCard = card("文字与操作", views: [row([label("整理"),cleanupPicker]),row([label("排版"),layoutPicker]),row([contextButton,shortcutButton]),label("保留原意和细节。处理结束后，位置提示会在5秒后消失。",size:12,color:.secondaryLabelColor)])
         permissionsLabel = label("",size:11,color:.secondaryLabelColor)
         let permissionCard = card("系统权限", views: [permissionsLabel,row([button("逐项授权引导",#selector(showPermissionGuide)),button("麦克风",#selector(requestMic)),button("辅助功能",#selector(requestAX)),button("输入监控",#selector(requestKeys))])])
-        addSettingsPage(settingsPage("语音输入", subtitle: "说完即写入当前光标位置，保持你的表达。", cards:[statusCard,micCard,cleanupCard,permissionCard]))
+        addSettingsPage(settingsPage("语音输入", subtitle: "说完即写入当前光标位置，保持你的表达。", cards:[statusCard,limitCard,micCard,cleanupCard,permissionCard],scrollable:true))
 
         resultView = NSTextView(); resultView.isEditable = false; resultView.isSelectable = true; resultView.isRichText = false
         resultView.font = .systemFont(ofSize:15); resultView.textContainerInset = NSSize(width:16,height:16)

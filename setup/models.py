@@ -232,7 +232,7 @@ def install(support, python, catalog, only='all', notify=emit, source='official'
             completed += row['size']
         atomic_json(directory / 'freetalk-manifest.json', model)
         config[model['key']] = str(directory)
-    defaults = {'maxRecordingSeconds': 90, 'cleanupTimeoutSeconds': 6, 'segmentMinSeconds': 8,
+    defaults = {'maxRecordingSeconds': 180, 'cleanupTimeoutSeconds': 6, 'segmentMinSeconds': 8,
                 'segmentMaxSeconds': 20, 'silenceRms': .008, 'residentGiB': 5}
     for key, value in defaults.items():
         config.setdefault(key, value)

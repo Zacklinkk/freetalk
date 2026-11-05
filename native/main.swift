@@ -28,6 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var undoableLearning: [LearnedCorrection] = []
     var cleanupPicker: NSPopUpButton!
     var layoutPicker: NSPopUpButton!
+    var recordingLimitView: RecordingLimitView?
+    var recordingClock = DictationClock(limit: DictationLimit.defaultSeconds)
+    var dictationLimit: TimeInterval {
+        DictationLimit.effective(preference: UserDefaults.standard.object(forKey: DictationLimit.preferenceKey), legacy: config["maxRecordingSeconds"])
+    }
     var learningButton: NSButton!
     var deviceInfoLabel: NSTextField!
     var startupLabel: NSTextField!
@@ -231,6 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordButton?.isEnabled = !appUpdater.installing && !meetings.busy && (recording || phase == .preparing || (phase == .idle && worker.ready && !inserter.busy && !modelSetup.busy))
         recordMenu?.isEnabled = recordButton?.isEnabled ?? false
         micPicker?.isEnabled = phase == .idle && !meetings.busy
+        recordingLimitView?.isEnabled = phase == .idle
         let icon = recording ? "stop.circle.fill" : (phase == .processing ? "ellipsis.circle" : (worker.ready ? "mic" : "mic.slash"))
         statusItem?.button?.image = NSImage(systemSymbolName: icon, accessibilityDescription: "freetalk：\(statusText)")
         statusItem?.button?.contentTintColor = recording ? .systemRed : nil
@@ -240,7 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else { statusItem?.button?.title = phase == .processing ? " 整理" : "" }
         statusItem?.button?.toolTip = statusText
         if phase == .preparing || phase == .recording || phase == .processing {
-            hud.update(recording: recording, seconds: seconds, level: level, stage: processingStage, targetIssue: targetIssue, anchor: hudAnchor)
+            refreshRecordingHUD()
         }
         refreshPermissions()
         modelSetupView?.refresh()
@@ -249,6 +255,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if meetings.recording || meetings.preparing { statusItem?.button?.title = " 会议录音"; statusItem?.button?.contentTintColor = .systemRed }
         else if meetings.processing { statusItem?.button?.title = " 会议整理" }
         if sidebarButtons.count > 4 { sidebarButtons[4].title = appUpdater.hasUpdate ? "软件更新 · 有更新" : "软件更新" }
+    }
+    func refreshRecordingHUD() {
+        hud.update(recording: phase == .recording, timing: recordingClock.snapshot(audioSeconds: seconds),
+                   level: level, stage: processingStage, targetIssue: targetIssue, anchor: hudAnchor)
     }
     func refreshPermissions() {
         let permissions = VoicePermissions.current(shortcutActive:hotkey.active)
@@ -383,6 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized { setStatus("请先允许麦克风访问"); onboarding.showPermissions(); return }
         phase = .preparing; session = UUID(); let token = session
         partial = ""; level = 0; seconds = 0; currentEntry = nil
+        recordingClock = DictationClock(limit: dictationLimit)
         processingStage = "正在打开麦克风…"; hudAnchor = target?.anchor
         if tutorialSession { hud.hide() } else { hud.show(target: target); monitorTarget() }
         var context = target?.context(enabled: contextButton.state == .on) ?? [:]
@@ -405,7 +416,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.recorder.onLevel = { [weak self] level, seconds in
                     guard let self = self, self.session == token, self.phase == .recording else { return }
                     self.level = level; self.seconds = seconds; self.refreshUI()
-                    if seconds >= (self.config["maxRecordingSeconds"] as? Double ?? 90) { self.stopRecording() }
+                    if self.recordingClock.snapshot(audioSeconds: seconds).expired { self.stopRecording() }
                 }
                 self.recorder.onError = { [weak self] message in
                     guard let self = self, self.session == token else { return }
@@ -420,14 +431,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.timer?.invalidate()
                     if case .failure(let error) = response { self.phase = .idle; self.hudTimer?.invalidate(); self.hud.finish(success: false, message: error.localizedDescription); self.setStatus(error.localizedDescription); return }
                     self.phase = .recording; self.started = Date()
-                    self.setStatus("正在录音 · \(device.name) · 右 Option 停止")
-                    self.timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                    self.recordingClock.start()
+                    self.setStatus("正在录音 · \(device.name) · 上限 \(DictationLimit.title(self.recordingClock.limit)) · 右 Option 停止")
+                    self.timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
                         guard let self = self, self.phase == .recording else { return }
-                        let elapsed = Date().timeIntervalSince(self.started)
+                        let timing = self.recordingClock.snapshot(audioSeconds: self.seconds)
+                        let elapsed = timing.elapsed
                         if elapsed > 3 && self.seconds < 0.1 { self.cancelRecording(); self.setStatus("没有收到麦克风音频，请检查设备和权限") }
-                        else if elapsed >= (self.config["maxRecordingSeconds"] as? Double ?? 90) + 1 { self.stopRecording() }
-                        else if elapsed > 4 && self.level < 0.0001 { self.setStatus("正在录音，但当前没有音量；请检查选中的麦克风") }
+                        else if timing.expired { self.stopRecording() }
+                        else {
+                            self.refreshRecordingHUD()
+                            if elapsed > 4 && self.level < 0.0001 && !self.statusText.contains("当前没有音量") {
+                                self.setStatus("正在录音，但当前没有音量；请检查选中的麦克风")
+                            }
+                        }
                     }
+                    RunLoop.main.add(self.timer!, forMode: .common)
                 }
             }
         }
@@ -528,6 +547,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard phase == .idle, !modelSetup.busy, !meetings.busy else { return }
         if let data = try? Data(contentsOf: support.appendingPathComponent("config.json")),
            let settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { config = settings }
+        recordingLimitView?.refresh()
         guard ModelSetup.configured(config) else {
             worker.stop(); modelText = "尚未准备好本地模型"; setStatus("请在「本地模型」中下载运行环境与模型"); return
         }
