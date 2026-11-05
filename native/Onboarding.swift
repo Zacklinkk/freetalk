@@ -131,6 +131,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         super.init()
         window.title = "欢迎使用 freetalk"; window.titleVisibility = .hidden; window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false; window.delegate = self; window.center()
+        step = min(4,max(0,UserDefaults.standard.integer(forKey:"onboardingStepV2")))
         let root = window.contentView!, sidebar = NSView()
         sidebar.wantsLayer = true; sidebar.layer?.backgroundColor = talkAccent.withAlphaComponent(0.09).cgColor
         sidebar.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(sidebar)
@@ -138,7 +139,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         let subtitle = app.label("说得自然，写得清楚。",size:12,color:.secondaryLabelColor)
         stepList.orientation = .vertical; stepList.alignment = .leading; stepList.spacing = 18
         stepList.addArrangedSubview(brand); stepList.addArrangedSubview(subtitle); stepList.setCustomSpacing(48,after:subtitle)
-        for (i,title) in ["认识 freetalk","准备本地模型","连接你的输入框","试说一句","准备完成"].enumerated() {
+        for (i,title) in ["认识 freetalk","开启系统权限","准备本地模型","试说一句","准备完成"].enumerated() {
             let text = app.label("\(i+1)  \(title)",size:13); stepLabels.append(text); stepList.addArrangedSubview(text)
         }
         stepList.translatesAutoresizingMaskIntoConstraints = false; sidebar.addSubview(stepList)
@@ -162,12 +163,17 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         render()
     }
     func show() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true); refresh() }
+    func showPermissions() {
+        guard app.phase == .idle else { return }
+        step = 1; render(); show()
+    }
     private func heading(_ title:String,_ description:String) {
         let text = app.label(title,size:32); text.font = .systemFont(ofSize:32,weight:.semibold); content.addArrangedSubview(text)
         content.addArrangedSubview(app.label(description,size:14,color:.secondaryLabelColor))
     }
     private func add(_ view:NSView) { content.addArrangedSubview(view); view.widthAnchor.constraint(equalTo:content.widthAnchor).isActive = true }
     private func render() {
+        UserDefaults.standard.set(step,forKey:"onboardingStepV2")
         for view in content.arrangedSubviews { content.removeArrangedSubview(view); view.removeFromSuperview() }
         download = nil; permissionLabels = []; permissionButtons = []; trialButton = nil; trialStatus = nil; trialPicker = nil; trialRaw = nil; trialResult = nil; mark = nil; finalStatus = nil
         switch step {
@@ -176,17 +182,18 @@ final class OnboardingController: NSObject, NSWindowDelegate {
             heading("想到什么，就说出来。","在输入框放好光标，说话、停下，文字就留在那里。\n语音识别与文字整理，全部在你的 Mac 上完成。")
             add(app.card("效果示例",views:[app.label("说出来",size:11,color:.secondaryLabelColor),app.label("呃，先用十个样本，不对，改成十二个。",size:17),app.label("整理后",size:11,color:talkAccent),app.label("先用12个样本。",size:23)]))
             add(app.label("清理口水词，保留你的意思；遇到明确改口，采用最后的说法。\n不会替你回答问题，也不会自动发送消息。",size:13,color:.secondaryLabelColor))
-        case 1:
+        case 2:
             heading("先把模型准备好。","只需下载一次。之后无需连接云端语音服务。")
             let view = ModelDownloadView(app:app); download = view; add(view)
-        case 2:
-            heading("让声音写进输入框。","每项权限都有明确用途，你可以逐项开启。")
-            for (i,item) in [("麦克风","仅在你主动开始录音时采集声音。"),("跨应用输入","读取当前输入框与光标位置，并把结果填回去。"),("右 Option 快捷键","在其他应用中轻按右 Option 开始，再按一次停止。")].enumerated() {
+        case 1:
+            heading("先连接声音和输入框。","按下面的步骤逐项开启，只需在系统设置中允许 freetalk。")
+            for permission in VoicePermission.allCases {
                 let state = app.label("",size:12,color:.secondaryLabelColor); permissionLabels.append(state)
-                let button = NSButton(title:"允许",target:self,action:#selector(grant(_:))); button.tag = i; button.bezelStyle = .rounded; permissionButtons.append(button)
-                add(app.card(item.0,item.1,views:[app.row([state,button])]))
+                let button = NSButton(title:"允许",target:self,action:#selector(grant(_:))); button.tag = permission.rawValue; button.bezelStyle = .rounded; permissionButtons.append(button)
+                add(app.card(permission.title,permission.instructions,views:[app.row([state,button])]))
             }
-            add(app.label("系统弹窗需要你本人确认。暂不开放跨应用输入或快捷键，也可以先在引导里试说。",size:12,color:.secondaryLabelColor))
+            add(app.row([app.button("我已设置，重新检查",#selector(AppDelegate.recheckPermissions)),app.button("在访达中显示本应用",#selector(AppDelegate.revealApplication))]))
+            add(app.label("返回此页会自动检查。若系统要求重开应用，引导会记住这一步。\nTouch ID 或密码由你在系统弹窗操作；只开麦克风也可以先试说。",size:12,color:.secondaryLabelColor))
         case 3:
             heading("试着说一句。","轻按右 Option 开始，再按一次结束；也可以点击按钮。\n最近10次试说仅在本次运行中保留，退出即清除，不输入其他应用。")
             add(app.card("可以照着读",views:[app.label("呃，先用十个样本，不对，改成十二个。保留所有日志。",size:17)]))
@@ -200,7 +207,8 @@ final class OnboardingController: NSObject, NSWindowDelegate {
             trialRaw = textArea(title:"识别原稿",text:raw,height:48)
             trialResult = textArea(title:"整理结果",text:result,height:72)
         default:
-            heading("下一句话，就用声音。","把光标放进任意可编辑的输入框，轻按右 Option。\n结束后先检查草稿，再由你发送。")
+            let permissions = VoicePermissions.current(shortcutActive:app.hotkey.active)
+            heading(permissions.canInsert ? "下一句话，就用声音。" : "可以先在应用里试说。",permissions.canInsert ? "把光标放进可编辑的输入框，用右 Option 或菜单开始录音。\n结束后先检查草稿，再由你发送。" : "跨应用输入仍需允许辅助功能。\n可从菜单的“权限设置引导”继续授权。")
             let state = app.label("",size:14); finalStatus = state
             add(app.card("你的 freetalk",views:[state]))
             add(app.card("从一开始就好用",views:[app.label("• 常用词：添加名字、项目名称和英文缩写。\n• 自动学习：可靠的短词改字可加入词库，5秒内可撤销。\n• 转写历史：本机保留最近500条，随时复制原稿或结果。",size:14)]))
@@ -217,17 +225,19 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         scroll.heightAnchor.constraint(equalToConstant:height).isActive = true; add(scroll); return textView
     }
     func refresh() {
-        let mic = AVCaptureDevice.authorizationStatus(for:.audio) == .authorized, ax = AXIsProcessTrusted(), keys = app.hotkey.active
+        let permissions = VoicePermissions.current(shortcutActive:app.hotkey.active)
+        let mic = permissions.microphoneAllowed, ax = permissions.accessibility, keys = permissions.shortcutReady
         for (i,label) in stepLabels.enumerated() { label.textColor = i == step ? talkAccent : .secondaryLabelColor; label.font = .systemFont(ofSize:13,weight:i == step ? .semibold : .regular) }
         let idle = app.phase == .idle
         progressText.stringValue = "\(step+1) / 5"; back.isHidden = step == 0; back.isEnabled = idle
-        later.isEnabled = idle; later.title = step == 2 && mic ? "先在这里试说" : step == 3 ? "跳过试说" : "稍后继续"
-        next.title = step == 0 ? "开始设置" : step == 4 ? "开始使用" : "继续"
-        next.isEnabled = idle && !app.modelSetup.busy && (step != 1 || app.worker.ready) && (step != 2 || (mic && ax && keys))
+        later.isEnabled = idle; later.title = step == 1 && mic ? "先只用麦克风" : step == 3 ? "跳过试说" : "稍后继续"
+        next.title = step == 0 ? "开始设置" : step == 1 ? "继续准备模型" : step == 4 ? (permissions.canInsert ? "开始使用" : "先在应用内使用") : "继续"
+        next.isEnabled = idle && !app.modelSetup.busy && (step != 2 || app.worker.ready) && (step != 1 || permissions.canContinue)
         if step == 4 { next.isEnabled = idle && !app.modelSetup.busy && app.worker.ready && mic }
-        for (i,allowed) in [mic,ax,keys].enumerated() where i < permissionLabels.count {
-            permissionLabels[i].stringValue = allowed ? "已就绪" : "尚未允许"; permissionLabels[i].textColor = allowed ? talkAccent : .secondaryLabelColor
-            permissionButtons[i].title = allowed ? "已允许" : "前往授权"; permissionButtons[i].isEnabled = !allowed
+        for permission in VoicePermission.allCases where permission.rawValue < permissionLabels.count {
+            let row = permissions.row(permission), i = permission.rawValue
+            permissionLabels[i].stringValue = row.status; permissionLabels[i].textColor = row.ready ? talkAccent : .secondaryLabelColor
+            permissionButtons[i].title = row.button; permissionButtons[i].isEnabled = row.enabled && idle
         }
         download?.refresh()
         trialButton?.title = app.phase == .recording ? "停止并整理" : app.phase == .preparing ? "取消启动" : app.phase == .processing ? "正在整理…" : result.isEmpty ? "开始试说" : "再试一次"
@@ -268,12 +278,16 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     @objc private func recordTrial() { app.toggle() }
     @objc private func goNext() {
         guard next.isEnabled else { return }
-        if step == 4 { UserDefaults.standard.set(true,forKey:"onboardingCompletedV1"); window.close(); app.showWindow(); return }
+        if step == 4 {
+            UserDefaults.standard.set(true,forKey:"onboardingCompletedV1")
+            UserDefaults.standard.set(!VoicePermissions.current(shortcutActive:app.hotkey.active).canContinue,forKey:"onboardingLimitedModeV1")
+            window.close(); app.showWindow(); return
+        }
         step += 1; render()
     }
     @objc private func goBack() { guard app.phase == .idle else { return }; step = max(0,step-1); render() }
     @objc private func pause() {
-        if step == 2 && AVCaptureDevice.authorizationStatus(for:.audio) == .authorized { step = 3; render() }
+        if step == 1 && AVCaptureDevice.authorizationStatus(for:.audio) == .authorized { step = 2; render() }
         else if step == 3 { step = 4; render() }
         else { window.close(); app.showWindow() }
     }

@@ -60,7 +60,7 @@ extension AppDelegate {
         shortcutButton.state = UserDefaults.standard.object(forKey: "shortcutEnabled") as? Bool == false ? .off : .on
         let cleanupCard = card("文字与操作", views: [row([label("整理"),cleanupPicker]),row([label("排版"),layoutPicker]),row([contextButton,shortcutButton]),label("保留原意和细节。处理结束后，位置提示会在5秒后消失。",size:12,color:.secondaryLabelColor)])
         permissionsLabel = label("",size:11,color:.secondaryLabelColor)
-        let permissionCard = card("系统权限", views: [permissionsLabel,row([button("麦克风权限",#selector(requestMic)),button("输入权限",#selector(requestAX)),button("快捷键权限",#selector(requestKeys))])])
+        let permissionCard = card("系统权限", views: [permissionsLabel,row([button("逐项授权引导",#selector(showPermissionGuide)),button("麦克风",#selector(requestMic)),button("辅助功能",#selector(requestAX)),button("输入监控",#selector(requestKeys))])])
         addSettingsPage(settingsPage("语音输入", subtitle: "说完即写入当前光标位置，保持你的表达。", cards:[statusCard,micCard,cleanupCard,permissionCard]))
 
         resultView = NSTextView(); resultView.isEditable = false; resultView.isSelectable = true; resultView.isRichText = false

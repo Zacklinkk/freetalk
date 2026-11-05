@@ -164,8 +164,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         reloadModel()
         let first = !UserDefaults.standard.bool(forKey: "onboardingCompletedV1")
+        let permissions = VoicePermissions.current(shortcutActive:hotkey.active)
         if first || CommandLine.arguments.contains("--onboarding") { onboarding.show() }
-        else if CommandLine.arguments.contains("--show") || !AXIsProcessTrusted() || AVCaptureDevice.authorizationStatus(for: .audio) != .authorized { showWindow() }
+        else if !permissions.microphoneAllowed || (permissions.needsGuidance && !UserDefaults.standard.bool(forKey:"onboardingLimitedModeV1")) { onboarding.showPermissions() }
+        else if CommandLine.arguments.contains("--show") { showWindow() }
         UserDefaults.standard.set(true, forKey: "hasOpened")
         // Sleep/device changes must invalidate the frozen insertion target.
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(sleeping), name: NSWorkspace.willSleepNotification, object: nil)
@@ -190,7 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordMenu = NSMenuItem(title: "开始录音", action: #selector(menuToggle), keyEquivalent: ""); recordMenu.target = self; menu.addItem(recordMenu)
         let cancel = NSMenuItem(title: "取消录音 / 处理", action: #selector(cancelAction), keyEquivalent: ""); cancel.target = self; menu.addItem(cancel)
         menu.addItem(.separator())
-        for (title, action) in [("设置与最近结果…", #selector(showWindow)), ("首次使用引导…",#selector(showOnboarding)), ("下载本地模型…",#selector(showModels)), ("个人词库…", #selector(showVocabulary)), ("转写历史（最多500条）…", #selector(showHistory)), ("复制最近结果", #selector(copyResult)), ("重新加载模型", #selector(reloadModel)), ("退出 freetalk", #selector(quit))] {
+        for (title, action) in [("设置与最近结果…", #selector(showWindow)), ("首次使用引导…",#selector(showOnboarding)), ("权限设置引导…",#selector(showPermissionGuide)), ("下载本地模型…",#selector(showModels)), ("个人词库…", #selector(showVocabulary)), ("转写历史（最多500条）…", #selector(showHistory)), ("复制最近结果", #selector(copyResult)), ("重新加载模型", #selector(reloadModel)), ("退出 freetalk", #selector(quit))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
         statusItem.menu = menu
@@ -230,9 +232,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         modelSetupView?.refresh()
     }
     func refreshPermissions() {
-        let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        permissionsLabel?.stringValue = "麦克风：\(mic ? "已允许" : "待授权")  ·  跨应用插入：\(AXIsProcessTrusted() ? "已允许" : "待授权")  ·  右 Option：\(hotkey.active ? "可用" : "未启用")"
+        let permissions = VoicePermissions.current(shortcutActive:hotkey.active)
+        permissionsLabel?.stringValue = "麦克风：\(permissions.microphoneAllowed ? "已允许" : "待授权")  ·  辅助功能：\(permissions.accessibility ? "已允许" : "待授权")  ·  右 Option：\(permissions.shortcutReady ? "可用" : permissions.shortcutEnabled ? "待连接 / 授权" : "未启用")"
         onboarding.refresh()
+    }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard window != nil else { return }
+        if phase == .idle { updateHotkey(); prepareSelectedDevice() }
+        else { refreshPermissions() }
     }
     func updateHotkey() {
         if UserDefaults.standard.object(forKey: "shortcutEnabled") as? Bool != false { hotkey.start() } else { hotkey.stop() }
@@ -296,18 +303,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func requestMic() {
         if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
-            AVCaptureDevice.requestAccess(for: .audio) { _ in DispatchQueue.main.async { self.refreshPermissions() } }
+            AVCaptureDevice.requestAccess(for: .audio) { _ in DispatchQueue.main.async { self.refreshPermissions(); self.prepareSelectedDevice() } }
         } else if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+            NSWorkspace.shared.open(VoicePermission.microphone.settingsURL)
         }
     }
     @objc func requestAX() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options); refreshPermissions()
+        if !AXIsProcessTrusted() { NSWorkspace.shared.open(VoicePermission.accessibility.settingsURL) }
     }
     @objc func requestKeys() {
-        _ = CGRequestListenEventAccess(); updateHotkey()
+        UserDefaults.standard.set(true,forKey:"shortcutEnabled"); shortcutButton?.state = .on
+        if !CGPreflightListenEventAccess() { _ = CGRequestListenEventAccess() }
+        updateHotkey()
+        if !CGPreflightListenEventAccess() { NSWorkspace.shared.open(VoicePermission.inputMonitoring.settingsURL) }
     }
+    @objc func recheckPermissions() { updateHotkey(); prepareSelectedDevice(); refreshPermissions() }
+    @objc func revealApplication() { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
     @objc func delayedStart() {
         guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy else { return }
         phase = .preparing; session = UUID(); let token = session
@@ -347,7 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do { target = tutorialSession ? nil : try InputSnapshot.capture() }
         catch { setStatus(error.localizedDescription); return }
         if target?.pid == ProcessInfo.processInfo.processIdentifier { target = nil }
-        if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized { setStatus("请先在设置中允许麦克风访问"); showWindow(); return }
+        if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized { setStatus("请先允许麦克风访问"); onboarding.showPermissions(); return }
         phase = .preparing; session = UUID(); let token = session
         partial = ""; level = 0; seconds = 0; currentEntry = nil
         processingStage = "正在打开麦克风…"; hudAnchor = target?.anchor
@@ -504,6 +517,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         modelSetup.start(config:config,only:only,source:ModelDownloadSource.preferred)
     }
     @objc func showOnboarding() { onboarding.show() }
+    @objc func showPermissionGuide() { onboarding.showPermissions() }
     @objc func showModels() {
         showWindow(); settingsTabs.selectTabViewItem(at:3)
         for (index,button) in sidebarButtons.enumerated() { button.state = index == 3 ? .on : .off }
