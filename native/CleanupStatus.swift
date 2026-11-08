@@ -10,6 +10,7 @@ func cleanupSummary(_ metadata: [String: Any]) -> String {
     else if metadata["status"] as? String == "fallback" { message = "整理未完成，已保留保守结果" }
     else if (metadata["applied_edits"] as? Int ?? 0) > 0 { message = "小模型整理" }
     else { message = "小模型已检查，未改动词句" }
+    if metadata["partial_plan"] as? Bool == true { message += " · 达到时间预算，保留已核对的局部整理" }
     if rejected > 0 { message += " · 有不确定修改未采用" }
     if warnings.contains("unresolved_self_correction") { message += "\n仍有未解决的改口，请检查原稿或重说。" }
     return message

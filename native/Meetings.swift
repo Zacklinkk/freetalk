@@ -35,6 +35,7 @@ final class MeetingController: NSObject {
     private(set) var message = "启用后可导入录音或使用麦克风。已有模型可直接生成初稿。"
     private(set) var fraction: Double?
     private var writer: MeetingWAVWriter?
+    private let recordingHUD = RecordingHUD()
     private var activeID: String?
     private var request = UUID()
     private var recordingDeviceUID: String?
@@ -47,6 +48,8 @@ final class MeetingController: NSObject {
            let saved = try? JSONSerialization.jsonObject(with:data) as? [String:Any] { settings.merge(saved) { _, new in new } }
     }
     func connect() {
+        recordingHUD.onStop = { [weak self] in self?.stopRecording() }
+        recordingHUD.onCancel = { [weak self] in self?.stopRecording(process:false) }
         downloads.onChange = { [weak self] in self?.onChange?(); self?.app.refreshUI() }
         downloads.onComplete = { [weak self] in
             guard let self = self else { return }; self.app.reloadModel(); self.message = "说话人模型已就绪，只在处理会议时加载。"; self.onChange?()
@@ -93,25 +96,24 @@ final class MeetingController: NSObject {
         item["audio_retained"] = FileManager.default.fileExists(atPath:directory(id).appendingPathComponent("audio.wav").path)
         try? write(item,to:url)
     }
+    var cloudConfigured: Bool {
+        let enabled = settings["cloud_enabled"] as? Bool ?? (settings["summary_mode"] as? String == "cloud")
+        return enabled && !(settings["base_url"] as? String ?? "").isEmpty && !(settings["model"] as? String ?? "").isEmpty
+    }
     func available() throws {
         guard enabled else { throw VoiceError.message("请先启用会议功能") }
         guard !busy, app.phase == .idle, !app.inserter.busy, !app.modelSetup.busy, !app.appUpdater.installing else { throw VoiceError.message("请先结束当前录音、处理或下载") }
         guard app.worker.ready else { throw VoiceError.message("请先准备本地模型，或等待模型加载完成") }
         if settings["diarization"] as? Bool == true,
            downloads.models.first?.filesPresent(config:app.config) != true { throw VoiceError.message("请先下载说话人模型，或关闭说话人区分") }
-        if settings["summary_mode"] as? String == "cloud" {
-            let endpoint = settings["base_url"] as? String ?? ""
-            guard let url = URL(string:endpoint), url.scheme == "https" || (url.scheme == "http" && ["localhost","127.0.0.1","::1"].contains(url.host ?? "")),
-                  url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
-                  !(settings["model"] as? String ?? "").isEmpty, !(MeetingKeychain.read(endpoint:endpoint) ?? "").isEmpty else { throw VoiceError.message("请先保存云端 API 地址、模型名和 API Key") }
-        }
+
     }
     func showError(_ error: Error) { message = error.localizedDescription; onChange?() }
     func showMessage(_ text: String) { message = text; onChange?() }
     func importAudio() {
         do { try available() } catch { showError(error); return }
         let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-        panel.title = "导入会议录音"; panel.message = "WAV、M4A、MP3、FLAC。音频只在本机转写；云端模式仅发送转写文字。"
+        panel.title = "导入会议录音"; panel.message = "WAV、M4A、MP3、FLAC。音频只在本机转写。配置云端增强后，仅发送基础纪要和相关引文。"
         panel.beginSheetModal(for:app.window) { [weak self] response in
             guard let self = self, response == .OK, let url = panel.url else { return }
             do { try self.available(); let id = try self.create(title:url.deletingPathExtension().lastPathComponent,source:"file"); self.process(id,audio:url) }
@@ -128,12 +130,14 @@ final class MeetingController: NSObject {
             activeID = id; request = UUID(); let token = request
             writer = try MeetingWAVWriter(url:directory(id).appendingPathComponent("audio.wav"))
             preparing = true; recordingDeviceUID = device.uid; message = "正在打开 \(device.name)…"; app.refreshUI(); onChange?()
+            recordingHUD.showMeeting()
             recorder.onChunk = { [weak self] data in
                 guard let self = self, self.request == token else { return }
                 do { try self.writer?.append(data) } catch { self.stopRecording(process:false); self.showError(error) }
             }
-            recorder.onLevel = { [weak self] _, seconds in
+            recorder.onLevel = { [weak self] level, seconds in
                 guard let self = self, self.request == token else { return }
+                self.recordingHUD.updateMeeting(level:level,seconds:seconds)
                 self.message = String(format:"正在录音 %02d:%02d · %@ · 结束后生成会议资料",Int(seconds)/60,Int(seconds)%60,device.name); self.onChange?()
                 if seconds >= 8*3600 { self.stopRecording() }
             }
@@ -145,13 +149,14 @@ final class MeetingController: NSObject {
                 guard let self = self, self.request == token else { return }; self.startupTimeout?.invalidate()
                 switch result {
                 case .success: self.preparing = false; self.recording = true; self.mark(id,status:"recording"); self.app.refreshUI(); self.onChange?()
-                case .failure(let error): self.preparing = false; self.writer?.close(); self.writer = nil; self.mark(id,status:"failed",error:error.localizedDescription); self.showError(error); self.app.refreshUI()
+                case .failure(let error): self.recordingHUD.hide(); self.preparing = false; self.writer?.close(); self.writer = nil; self.mark(id,status:"failed",error:error.localizedDescription); self.showError(error); self.app.refreshUI()
                 }
             }
         } catch { showError(error) }
     }
     func stopRecording(process: Bool = true) {
         guard recording || preparing, let id = activeID else { return }
+        recordingHUD.finishMeeting(process ? "正在生成本地会议资料" : "已暂停，可在会议资料中继续处理")
         recording = false; preparing = false; processing = true; startupTimeout?.invalidate()
         recorder.onLevel = nil; recorder.onError = nil
         recorder.stop { [weak self] seconds,_ in
@@ -169,11 +174,13 @@ final class MeetingController: NSObject {
         var payload: [String:Any] = ["support":app.support.path,"meeting_id":id]
         payload["hotwords"] = (try? app.vocabularyStore.load()) ?? []
         if let audio = audio { payload["audio_path"] = audio.path }
-        if settings["summary_mode"] as? String == "cloud" { payload["api_key"] = MeetingKeychain.read(endpoint:settings["base_url"] as? String ?? "") ?? "" }
+        if cloudConfigured { payload["api_key"] = MeetingKeychain.read(endpoint:settings["base_url"] as? String ?? "") ?? "" }
         app.worker.request("meeting",payload) { [weak self] result in
             guard let self = self, self.request == token else { return }; self.processing = false; self.fraction = nil
             switch result {
-            case .success: self.message = "纪要、原稿和脑图已生成。可查看、导出或交给 agent。"
+            case .success:
+                let manifest = (try? Data(contentsOf:self.directory(id).appendingPathComponent("manifest.json"))).flatMap { try? JSONSerialization.jsonObject(with:$0) as? [String:Any] }
+                self.message = manifest?["deep_status"] as? String == "failed" ? "本地纪要、原稿和脑图已生成；云端深度整理失败，可检查配置后重试。" : "会议资料已生成。可查看、导出或交给 agent。"
             case .failure(let error): self.message = "会议处理未完成：\(error.localizedDescription)"; self.mark(id,status:"failed",error:error.localizedDescription)
             }
             self.app.refreshUI(); self.onComplete?(id); self.onChange?()

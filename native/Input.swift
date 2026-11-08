@@ -15,34 +15,55 @@ struct OptionTapState {
     }
 }
 
+// Only claim the physical right Option + M chord. A held key fires once,
+// and its matching key-up is consumed even if Option was released first.
+struct MeetingChordState {
+    private var claimed = false
+    mutating func event(code: Int, down: Bool, rightOption: Bool, otherModifiers: Bool, repeated: Bool) -> (consume: Bool, fire: Bool) {
+        guard code == 46 else { return (false, false) }
+        if !down { let was = claimed; claimed = false; return (was, false) }
+        if claimed { return (true, false) }
+        guard rightOption, !otherModifiers, !repeated else { return (false, false) }
+        claimed = true; return (true, true)
+    }
+}
+
 final class GlobalHotkey {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var state = OptionTapState()
+    private var meetingChord = MeetingChordState()
     var onToggle: (() -> Void)?
+    var onMeeting: (() -> Void)?
     var onEscape: (() -> Void)?
     var active: Bool { tap != nil }
     func start() {
         stop()
         // Check, do not prompt implicitly at launch.
         guard CGPreflightListenEventAccess() else { return }
-        let mask = (CGEventMask(1) << CGEventType.flagsChanged.rawValue) | (CGEventMask(1) << CGEventType.keyDown.rawValue)
-        tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly,
+        let mask = (CGEventMask(1) << CGEventType.flagsChanged.rawValue) | (CGEventMask(1) << CGEventType.keyDown.rawValue) | (CGEventMask(1) << CGEventType.keyUp.rawValue)
+        tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
             eventsOfInterest: mask, callback: { _, type, event, pointer in
                 guard let pointer = pointer else { return Unmanaged.passUnretained(event) }
                 let owner = Unmanaged<GlobalHotkey>.fromOpaque(pointer).takeUnretainedValue()
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                     if let tap = owner.tap { CGEvent.tapEnable(tap: tap, enable: true) }
                     owner.state = OptionTapState()
+                    owner.meetingChord = MeetingChordState()
                     return Unmanaged.passUnretained(event)
                 }
                 let code = Int(event.getIntegerValueField(.keyboardEventKeycode))
+                let others = !event.flags.intersection([.maskCommand,.maskControl,.maskShift]).isEmpty || event.flags.rawValue & 0x20 != 0
+                let rightDown = event.flags.rawValue & 0x40 != 0
+                if type == .keyDown || type == .keyUp {
+                    if type == .keyDown { owner.state.keyDown() }
+                    let chord = owner.meetingChord.event(code:code,down:type == .keyDown,rightOption:rightDown,otherModifiers:others,repeated:event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
+                    if chord.fire { DispatchQueue.main.async { owner.onMeeting?() } }
+                    if chord.consume { return nil }
+                }
                 if type == .keyDown {
-                    owner.state.keyDown()
                     if code == 53 { DispatchQueue.main.async { owner.onEscape?() } }
                 } else if type == .flagsChanged {
-                    let others = !event.flags.intersection([.maskCommand,.maskControl,.maskShift]).isEmpty
-                    let rightDown = event.flags.rawValue & 0x40 != 0 // NX_DEVICERALTKEYMASK
                     if owner.state.flags(code: code, rightDown: rightDown, otherModifiers: others, now: ProcessInfo.processInfo.systemUptime) {
                         DispatchQueue.main.async { owner.onToggle?() }
                     }
@@ -58,7 +79,7 @@ final class GlobalHotkey {
     func stop() {
         if let source = source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         if let tap = tap { CFMachPortInvalidate(tap) }
-        source = nil; tap = nil; state = OptionTapState()
+        source = nil; tap = nil; state = OptionTapState(); meetingChord = MeetingChordState()
     }
     deinit { stop() }
 }
@@ -69,9 +90,23 @@ func axAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     return value
 }
 
+private var requestedAccessibility = Set<String>()
+
 func focusedElement(_ pid: pid_t) -> AXUIElement? {
     let app = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(app, 0.2)
+    // Chromium/Electron may expose only the shell until an assistive client
+    // requests its accessibility tree. This does not grant macOS permission.
+    if let running = NSRunningApplication(processIdentifier:pid), let bundle = running.bundleIdentifier,
+       bundle.contains("doubao") || bundle.contains("Chrome") || bundle.contains("comate") {
+        let identity = "\(pid):\(running.launchDate?.timeIntervalSince1970 ?? 0)"
+        if !requestedAccessibility.contains(identity) {
+            AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+            if requestedAccessibility.count > 128 { requestedAccessibility.removeAll() }
+            requestedAccessibility.insert(identity)
+        }
+    }
     guard let value = axAttribute(app, kAXFocusedUIElementAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
     let element = value as! AXUIElement
     AXUIElementSetMessagingTimeout(element, 0.2)
@@ -192,9 +227,45 @@ struct InputSnapshot {
         let text = value as NSString
         let start = max(0, range.location - 900)
         let end = min(text.length, range.location + range.length + 100)
-        return ["initial": text.substring(to: min(text.length, 500)),
+        let application = NSRunningApplication(processIdentifier:pid)
+        let bundle = application?.bundleIdentifier ?? ""
+        let scene: String
+        if ["terminal","iterm"].contains(where:bundle.lowercased().contains) { scene = "terminal" }
+        else if ["codex","comate","vscode","xcode","cursor"].contains(where:bundle.lowercased().contains) { scene = "development" }
+        else if ["doubao","chat","hi.mac","wechat"].contains(where:bundle.lowercased().contains) { scene = "conversation" }
+        else { scene = "general" }
+        return ["app":name,"scene":scene,"window_title":identity.windowTitle,
+                "nearby":UserDefaults.standard.bool(forKey:"windowContextEnabled") ? nearbyText() : "",
+                "initial": text.substring(to: min(text.length, 500)),
                 "latest": text.substring(with: NSRange(location: start, length: min(1000, end - start)))]
     }
+    private func nearbyText() -> String {
+        // Bounded to the selected input's containing pane and current window.
+        // Read once at recording start; no clipboard, screenshots or background monitoring.
+        guard let window = window, let frame = axRect(window) else { return "" }
+        var root = element
+        for _ in 0..<4 {
+            guard let parent = axAttribute(root,kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+            let node = parent as! AXUIElement
+            if CFEqual(node,window) { break }; root = node
+        }
+        var queue = [root], values = [String](), count = 0
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.08
+        while !queue.isEmpty && count < 80 && ProcessInfo.processInfo.systemUptime < deadline && values.joined().count < 1800 {
+            let node = queue.removeFirst(); count += 1
+            AXUIElementSetMessagingTimeout(node,0.02)
+            if (axAttribute(node,kAXSubroleAttribute) as? String ?? "").localizedCaseInsensitiveContains("secure") { continue }
+            if let rect = axRect(node), !rect.intersects(frame) { continue }
+            if let value = axAttribute(node,kAXValueAttribute) as? String, !value.isEmpty, !values.contains(value) {
+                values.append(String(value.prefix(600)))
+            }
+            if let children = axAttribute(node,kAXVisibleChildrenAttribute) as? [AXUIElement] ?? axAttribute(node,kAXChildrenAttribute) as? [AXUIElement] {
+                queue.append(contentsOf:children.prefix(max(0,80-count-queue.count)))
+            }
+        }
+        return String(values.joined(separator:"\n").prefix(1800))
+    }
+
 }
 
 final class TextInserter {
@@ -238,7 +309,7 @@ final class TextInserter {
         guard originalChange == clipboard.changeCount, target.unchanged() else {
             busy = false; completion(false, "未自动输入：\(target.failureReason() ?? "剪贴板已变化")；结果已保留"); return
         }
-        guard let source = CGEventSource(stateID: .privateState),
+        guard let source = CGEventSource(stateID: .combinedSessionState),
             let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
             let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else {
             busy = false; completion(false, "无法发送粘贴操作，结果已保留"); return
@@ -259,7 +330,10 @@ final class TextInserter {
         pendingRestore = restore
         guard wrote else { restore(); pendingRestore = nil; busy = false; completion(false, "剪贴板写入失败，结果已保留"); return }
         down.flags = .maskCommand; up.flags = .maskCommand
-        down.postToPid(target.pid); up.postToPid(target.pid)
+        // Dispatch through the normal keyboard path. Direct per-PID events can
+        // bypass Chromium's input/IME routing even when manual Cmd-V works.
+        guard target.unchanged() else { restore(); pendingRestore=nil; busy=false; completion(false,"目标已变化，结果已保留"); return }
+        down.post(tap:.cghidEventTap); up.post(tap:.cghidEventTap)
         let expected = (target.value as NSString).replacingCharacters(in: NSRange(location: target.range.location, length: target.range.length), with: text)
         let began = Date()
         func verify() {

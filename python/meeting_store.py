@@ -13,7 +13,7 @@ from pathlib import Path
 SCHEMA = 'freetalk.meeting.v1'
 DEFAULT_SUPPORT = Path.home() / 'Library/Application Support/freetalk'
 EXPORT_FILES = ('manifest.json', 'transcript.jsonl', 'minutes.json', 'minutes.md',
-                'minutes.html', 'transcript.md', 'transcript.html', 'mindmap.json', 'mindmap.mmd', 'mindmap.html', 'agent-context.md')
+                'minutes.html', 'transcript.md', 'transcript.html', 'mindmap.json', 'mindmap.mmd', 'mindmap.html', 'agent-context.md', 'deep.json', 'deep.md', 'deep.html')
 
 
 def atomic_json(path, value):
@@ -110,9 +110,11 @@ class MeetingStore:
     def read(self, meeting_id):
         directory = self.directory(meeting_id)
         result = {'manifest': self.manifest(meeting_id), 'segments': self.segments(meeting_id)}
-        for key, name in [('minutes', 'minutes.json'), ('mindmap', 'mindmap.json')]:
+        for key, name in [('minutes', 'minutes.json'), ('mindmap', 'mindmap.json'), ('deep', 'deep.json')]:
             path = directory / name
             result[key] = json.loads(path.read_text()) if path.exists() else None
+            if key == 'deep' and (result['manifest'].get('deep_status') != 'complete' or (result[key] and result[key].get('source_digest') != result['manifest'].get('source_digest'))):
+                result[key] = None
         return result
 
     def export(self, meeting_id, destination):
@@ -120,6 +122,8 @@ class MeetingStore:
         destination = Path(destination).expanduser() / ('freetalk-' + meeting_id)
         destination.mkdir(parents=True, exist_ok=False, mode=0o700)
         for name in EXPORT_FILES:
+            if name.startswith('deep.') and self.read(meeting_id).get('deep') is None:
+                continue
             source = self.directory(meeting_id) / name
             if source.is_file() and not source.is_symlink():
                 shutil.copyfile(source, destination / name)

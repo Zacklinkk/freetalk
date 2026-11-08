@@ -220,7 +220,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         content.addArrangedSubview(app.label(title,size:11,color:.secondaryLabelColor))
         let textView = NSTextView(); textView.isEditable = false; textView.isSelectable = true; textView.isRichText = false
         textView.font = .systemFont(ofSize:15); textView.textContainerInset = NSSize(width:12,height:10); textView.string = text; textView.setAccessibilityLabel("试说\(title)")
-        let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder; scroll.documentView = textView
+        let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .noBorder; scroll.documentView = textView
         textView.isVerticallyResizable = true; textView.autoresizingMask = [.width]; textView.textContainer?.widthTracksTextView = true
         scroll.heightAnchor.constraint(equalToConstant:height).isActive = true; add(scroll); return textView
     }

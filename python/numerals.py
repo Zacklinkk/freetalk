@@ -14,8 +14,8 @@ WORDS = re.compile(r'星期[一二三四五六日天]|礼拜[一二三四五六�
 LEXICAL = re.compile(r'统一|唯一|单一|同一|逐一|不一|一并|一律|一概|一贯|一部分|一系列|一体|一类|一线|一流|一番|一味|一度|一向|一时|一再|一起|十分(?=方便|重要|困难|简单|清楚|明确|容易|稳定|相似|必要|满意|感谢|高兴|复杂|好|大|小)|万分|百度|百科|万维|两者|二者|双方|三者|两全|三维|二维|一维')
 NUMBER_CUE = re.compile(r'(?:编号|号码|编码|密码|数字|输入|读作|版本|金额|预算|总计|共计|数量|人数|样本数)(?:为|是|有|约|：|:|\s)*$')
 EXACT_ONE_CUE = re.compile(r'(?:只有|仅有|仅|总共|一共|共|还剩|剩|恰好|正好|至少|最多|最少|不超过|只用|保留|[=＝:：])\s*$')
-VERSION_HEAD = re.compile(r'(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_.+-]{1,39}|v)[ \t]*$')
-VERSION_TAIL = re.compile(r'^(?:$|[\s，,。！？!?；;：:、/()（）]|的|和|与|或|以及|到|对比|版本|模型|资源|可|能|支持|用于|用来|来|重新|再|先|跑|测|做|生成|处理|表现|速度|性能|价格)')
+VERSION_HEAD = re.compile(r'(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_.+-]{1,39}|[vV])[ \t]*$')
+VERSION_TAIL = re.compile(r'^(?:$|[\s，,。！？!?；;：:、/()（）]|的|和|与|或|有|没有|是|在|比|以及|到|对比|版本|模型|资源|可|能|支持|用于|用来|来|重新|再|先|跑|测|做|生成|处理|表现|速度|性能|价格)')
 
 def integer(token):
     if not token: return None
@@ -63,6 +63,25 @@ def numeric(token):
     return sign+left+magnitude+suffix+('%' if percent else '')
 
 def normalize(text, protected_terms=()):
+    # Explicit identifiers have a different grammar from ordinary Chinese prose.
+    # Only a version prefix or a model/code label opens this conversion scope.
+    extra = 0
+    literal_ranges = [(m.start(),m.end()) for m in LITERALS.finditer(text)]
+    def identifier(match):
+        nonlocal extra
+        if any(match.start()<b and match.end()>a for a,b in literal_ranges): return match[0]
+        if any(term and term in match[0] for term in protected_terms): return match[0]
+        value = match['value']
+        value = re.sub(r'(?:横杠|连字符|杠)[。\s]*', '-', value)
+        value = ''.join(DIGITS.get(c,c) for c in value).replace('点','.')
+        if value != match['value']: extra += 1
+        return match['head'] + value
+    # Do not parse dates, prose or quoted strings as product codes.
+    pattern = r'(?P<head>(?:型号|编号|编码)(?:是|为|：|:|\s)*)(?P<value>[A-Z]{1,12}(?:(?:横杠|连字符|杠)[。\s]*|[A-Z0-9零〇一二三四五六七八九幺-]){1,60})'
+    text = re.sub(pattern, identifier, text)
+    literal_ranges = [(m.start(),m.end()) for m in LITERALS.finditer(text)]
+    pattern = r'(?P<head>(?<![A-Za-z0-9_])[vV])(?P<value>[0-9零〇一二三四五六七八九]+(?:点[0-9零〇一二三四五六七八九]+)+)(?![A-Za-z])'
+    text = re.sub(pattern, identifier, text)
     protected=[(m.start(),m.end()) for pattern in (LITERALS,WORDS,LEXICAL) for m in pattern.finditer(text)]
     for term in protected_terms:
         if isinstance(term,str) and term:
@@ -83,7 +102,7 @@ def normalize(text, protected_terms=()):
         is_digits=all(c in DIGITS for c in bare)
         standalone = not before.strip(' ：:，,。') and not after.strip(' ，,。.!！?？')
         cue = bool(NUMBER_CUE.search(before))
-        quantity = bool(re.match(COUNTERS,after))
+        quantity = bool(re.match(COUNTERS,after)) and not any(l <= b < r for l,r in protected)
         # Model/product identifiers use numeric versions, regardless of brand.
         # Lexical phrases (一直/一般/五花八门), quotations and personal names
         # are protected above; a following classifier still uses quantity rules.
@@ -103,4 +122,4 @@ def normalize(text, protected_terms=()):
         new=numeric(word)
         if new is not None and new!=word:patches.append((a,b,new))
     for a,b,new in reversed(patches):text=text[:a]+new+text[b:]
-    return text,len(patches)
+    return text,len(patches)+extra

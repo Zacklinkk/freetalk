@@ -21,7 +21,12 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     let enable = NSButton(checkboxWithTitle:"启用会议资料 · 可选功能",target:nil,action:nil)
     let diarization = NSButton(checkboxWithTitle:"区分说话人 · 额外下载约 107 MB",target:nil,action:nil)
     let retain = NSButton(checkboxWithTitle:"完成后保留本机录音",target:nil,action:nil)
-    let mode = NSPopUpButton(), source = NSPopUpButton()
+    let source = NSPopUpButton()
+    let cloudDisclosure = NSButton(title:"云端深度整理与写作 · 可选",target:nil,action:nil)
+    let cloudStatus = NSTextField(wrappingLabelWithString:"")
+    let writingStyle = NSTextField()
+    let tabs = NSTabView()
+    let tabPicker = NSSegmentedControl(labels:["录音与资料","选项"],trackingMode:.selectOne,target:nil,action:nil)
     let endpoint = NSTextField(), model = NSTextField(), key = NSSecureTextField()
     let terms = NSTextField()
     let status = NSTextField(wrappingLabelWithString:"")
@@ -32,7 +37,7 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     let table = NSTableView(), text = NSTextView()
     let web: WKWebView
     let output = NSTabView()
-    let outputPicker = NSSegmentedControl(labels:["纪要","转写","脑图","Agent"],trackingMode:.selectOne,target:nil,action:nil)
+    let outputPicker = NSSegmentedControl(labels:["基础纪要","原稿","脑图","Agent","深度整理"],trackingMode:.selectOne,target:nil,action:nil)
     let title = NSTextField()
     var record: NSButton!, importButton: NSButton!, resumeButton: NSButton!, cancelButton: NSButton!, downloadButton: NSButton!
     var saveCloud: NSButton!
@@ -46,8 +51,11 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let cfg = WKWebViewConfiguration(); cfg.websiteDataStore = .nonPersistent(); cfg.defaultWebpagePreferences.allowsContentJavaScript = false
         web = WKWebView(frame:.zero,configuration:cfg)
         super.init(frame:.zero)
-        let tabs = NSTabView(); tabs.tabViewType = .topTabsBezelBorder; tabs.translatesAutoresizingMaskIntoConstraints = false; addSubview(tabs)
-        NSLayoutConstraint.activate([tabs.topAnchor.constraint(equalTo:topAnchor),tabs.leadingAnchor.constraint(equalTo:leadingAnchor),tabs.trailingAnchor.constraint(equalTo:trailingAnchor),tabs.bottomAnchor.constraint(equalTo:bottomAnchor)])
+        tabs.tabViewType = .noTabsNoBorder; tabs.drawsBackground = false
+        tabPicker.selectedSegment = 0; tabPicker.target = self; tabPicker.action = #selector(tabChanged)
+        let layout = stack([enable,tabPicker,tabs]); pin(layout,in:self)
+        tabs.widthAnchor.constraint(equalTo:layout.widthAnchor).isActive = true
+        tabs.setContentHuggingPriority(.defaultLow,for:.vertical)
         let library = NSTabViewItem(identifier:"library"); library.label = "录音与会议资料"; library.view = makeLibrary(); tabs.addTabViewItem(library)
         let options = NSTabViewItem(identifier:"options"); options.label = "会议选项与模型"; options.view = makeOptions(); tabs.addTabViewItem(options)
         enable.target = self; enable.action = #selector(enableChanged)
@@ -72,7 +80,7 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         progress.minValue = 0; progress.maxValue = 1; progress.style = .bar; progress.isIndeterminate = false
         status.font = .systemFont(ofSize:12); status.textColor = .secondaryLabelColor
         let columns = NSStackView(); columns.orientation = .horizontal; columns.spacing = 14; columns.alignment = .top
-        let left = NSScrollView(); left.hasVerticalScroller = true; left.borderType = .bezelBorder
+        let left = NSScrollView(); left.hasVerticalScroller = true; left.borderType = .noBorder; left.drawsBackground = false; table.backgroundColor = .clear
         let column = NSTableColumn(identifier:NSUserInterfaceItemIdentifier("meeting")); column.width = 165; table.addTableColumn(column)
         table.headerView = nil; table.rowHeight = 64; table.dataSource = self; table.delegate = self; table.allowsEmptySelection = false
         table.setAccessibilityLabel("会议资料列表"); left.documentView = table
@@ -89,16 +97,13 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         output.setContentHuggingPriority(.defaultLow,for:.vertical); columns.setContentHuggingPriority(.defaultLow,for:.vertical)
         resumeButton = action("继续处理",#selector(resume))
         let controls = app.row([action("刷新",#selector(refresh)),resumeButton,action("导出资料…",#selector(export)),action("打开文件夹",#selector(reveal))])
-        let all = stack([enable,title,app.row([record,importButton,cancelButton]),status,progress,columns,controls])
+        let all = stack([app.label("右 Option + M 开始或结束会议录音",size:12,color:.secondaryLabelColor),title,app.row([record,importButton,cancelButton]),status,progress,columns,controls])
         pin(all,in:host)
         for view in [title,status,progress,columns] { view.widthAnchor.constraint(equalTo:all.widthAnchor).isActive = true }
         return host
     }
     private func makeOptions() -> NSView {
         let host = MeetingOptionsDocument(frame:NSRect(x:0,y:0,width:600,height:900))
-        mode.addItems(withTitles:["本地初稿 · 复用现有 Qwen3 4B","云端增强 · 发送转写文字"])
-        mode.selectItem(at:controller.settings["summary_mode"] as? String == "cloud" ? 1 : 0); mode.target = self; mode.action = #selector(optionsChanged)
-        mode.setAccessibilityLabel("会议纪要模型")
         diarization.state = controller.settings["diarization"] as? Bool == true ? .on : .off; diarization.target = self; diarization.action = #selector(optionsChanged)
         retain.state = controller.settings["retain_audio"] as? Bool == true ? .on : .off; retain.target = self; retain.action = #selector(optionsChanged)
         source.addItems(withTitles:["Hugging Face 官方","HF-Mirror 镜像"]); source.selectItem(at:ModelDownloadSource.preferred == .mirror ? 1 : 0)
@@ -109,22 +114,32 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         saveCloud = action("保存云端配置",#selector(saveCloudSettings))
         terms.placeholderString = "会议术语，逗号分隔，如：SFT、项目名称"; terms.setAccessibilityLabel("会议术语")
         terms.stringValue = (controller.settings["terms"] as? [String] ?? []).joined(separator:", ")
-        cloudBox = stack([app.label("云端配置",size:14),endpoint,model,key,saveCloud,
-            app.label("仅在你选择云端模式并开始处理会议时，向该地址发送转写文字。录音仍在本机。API Key 存入 macOS 钥匙串，不进入导出文件。",size:12,color:.secondaryLabelColor)])
+        writingStyle.placeholderString = "例如：整理为项目周报，先结论，再列决定、行动项和待确认事项"
+        writingStyle.stringValue = controller.settings["writing_style"] as? String ?? ""
+        writingStyle.setAccessibilityLabel("深度整理写作要求")
+        cloudDisclosure.setButtonType(.pushOnPushOff); cloudDisclosure.isBordered = false; cloudDisclosure.imagePosition = .imageLeading; cloudDisclosure.font = .systemFont(ofSize:13,weight:.medium); cloudDisclosure.setAccessibilityLabel("展开云端深度整理与写作配置")
+        cloudDisclosure.target = self; cloudDisclosure.action = #selector(toggleCloud)
+        cloudDisclosure.state = controller.cloudConfigured ? .on : .off
+        cloudStatus.font = .systemFont(ofSize:12); cloudStatus.textColor = .secondaryLabelColor
+        let form = VoiceAppearance.form([("API 地址",endpoint),("模型名称",model),("API Key",key),("写作要求",writingStyle)])
+        let explanation = app.label("保存配置后，新会议会先在本机生成基础纪要与脑图，再把基础纪要和相关引文发送到你指定的服务，生成独立的深度整理版本。支持 OneAPI 等 OpenAI 兼容服务。音频不上传；密钥存入 macOS 钥匙串。",size:12,color:.secondaryLabelColor)
+        cloudBox = stack([form,app.row([saveCloud,action("停用云端增强",#selector(disableCloud))]),explanation])
+        form.widthAnchor.constraint(equalTo:cloudBox.widthAnchor).isActive = true
+        explanation.widthAnchor.constraint(equalTo:cloudBox.widthAnchor).isActive = true
         let privacy = app.label("本地：现有 0.6B ASR + 4B 整理模型。\n说话人区分：Nemotron-3 8bit，约 107 MB，最多 8 个匿名说话人；不识别真实身份，重叠语音可能需要核对。\n录音处理中临时保存；成功后按开关保留或删除。失败/中止时保留，便于继续处理。会议资料单独保存，不套用普通转写的 500 条上限。",size:12,color:.secondaryLabelColor)
         let agent = app.label("Agent 可以通过 CLI 读取 JSON、搜索原文、导出 Markdown 与脑图。读取不加载模型、不需要云端密钥，也不会执行会议中的行动项。",size:12,color:.secondaryLabelColor)
         optionsStatus.font = .systemFont(ofSize:12); optionsStatus.textColor = .secondaryLabelColor
         optionsProgress.minValue = 0; optionsProgress.maxValue = 1; optionsProgress.style = .bar; optionsProgress.isIndeterminate = false
         saveTermsButton = action("保存术语",#selector(saveTerms))
         let termsRow = app.row([terms,saveTermsButton])
-        let all = stack([app.label("按需开启，控制数据去向",size:20),mode,diarization,app.row([source,downloadButton]),optionsStatus,optionsProgress,retain,termsRow,privacy,cloudBox,agent,action("复制 CLI 路径",#selector(copyCLI)),action("查看说话人模型与许可",#selector(openModelSource))],spacing:10)
+        let all = stack([app.label("本地基础整理始终保留",size:18),diarization,app.row([source,downloadButton]),optionsStatus,optionsProgress,retain,termsRow,privacy,cloudDisclosure,cloudStatus,cloudBox,agent,action("复制 CLI 路径",#selector(copyCLI)),action("查看说话人模型与许可",#selector(openModelSource))],spacing:10)
         terms.widthAnchor.constraint(greaterThanOrEqualToConstant:160).isActive = true
         terms.setContentHuggingPriority(.defaultLow,for:.horizontal)
         saveTermsButton.setContentCompressionResistancePriority(.required,for:.horizontal)
         all.translatesAutoresizingMaskIntoConstraints = false; host.addSubview(all)
         NSLayoutConstraint.activate([all.topAnchor.constraint(equalTo:host.topAnchor,constant:20),all.leadingAnchor.constraint(equalTo:host.leadingAnchor,constant:18),all.trailingAnchor.constraint(equalTo:host.trailingAnchor,constant:-18)])
         for v in [privacy,agent,cloudBox!,optionsStatus,optionsProgress,termsRow] { v.widthAnchor.constraint(equalTo:all.widthAnchor).isActive = true }
-        for v in [endpoint,model,key] { v.widthAnchor.constraint(equalTo:cloudBox.widthAnchor).isActive = true }
+        cloudStatus.widthAnchor.constraint(equalTo:all.widthAnchor).isActive = true
         let scroll = MeetingOptionsScroll(); scroll.hasVerticalScroller = true; scroll.drawsBackground = false; scroll.documentView = host; scroll.contentStack = all
         optionsScroll = scroll
         return scroll
@@ -137,10 +152,12 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         record.isEnabled = ready || controller.recording || controller.preparing; importButton.isEnabled = ready
         resumeButton.isEnabled = ready && selectedID != nil; cancelButton.isEnabled = running
         title.isEnabled = !running
-        for v in [mode,diarization,retain,source] as [NSControl] { v.isEnabled = controller.enabled && !running }
+        for v in [diarization,retain,source] as [NSControl] { v.isEnabled = controller.enabled && !running }
         downloadButton.isEnabled = controller.enabled && diarization.state == .on && !running && app.phase == .idle
-        cloudBox.isHidden = mode.indexOfSelectedItem != 1
-        for v in [endpoint,model,key,saveCloud] as [NSControl] { v.isEnabled = controller.enabled && !running }
+        cloudBox.isHidden = cloudDisclosure.state != .on
+        cloudDisclosure.image = NSImage(systemSymbolName:cloudDisclosure.state == .on ? "chevron.down" : "chevron.right",accessibilityDescription:nil)
+        cloudStatus.stringValue = controller.cloudConfigured ? "已配置：本地基础整理 + 云端深度整理" : "未配置：仅在本机生成基础纪要与脑图"
+        for v in [endpoint,model,key,writingStyle,saveCloud] as [NSControl] { v.isEnabled = controller.enabled && !running }
         terms.isEnabled = controller.enabled && !running; saveTermsButton.isEnabled = terms.isEnabled
         if controller.downloads.busy { status.stringValue = controller.downloads.message + "\n" + controller.downloads.progressText; progress.doubleValue = controller.downloads.fraction ?? 0 }
         else { status.stringValue = controller.message; progress.doubleValue = controller.fraction ?? 0 }
@@ -170,9 +187,24 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
             let file = directory.appendingPathComponent(["minutes.html","transcript.html","mindmap.html"][max(0,outputPicker.selectedSegment)])
             if FileManager.default.fileExists(atPath:file.path) { web.loadFileURL(file,allowingReadAccessTo:directory); output.selectTabViewItem(at:1); return }
         }
-        let names = ["minutes.md","transcript.md","mindmap.mmd","agent-context.md"]
+        if outputPicker.selectedSegment == 4 {
+            let manifest = entries[table.selectedRow]
+            guard manifest["deep_status"] as? String == "complete" else {
+                text.string = manifest["deep_error"] as? String ?? "尚无深度整理。可在“选项”中展开云端配置；本地基础资料始终独立保留。"
+                output.selectTabViewItem(at:0); return
+            }
+            web.loadFileURL(directory.appendingPathComponent("deep.html"),allowingReadAccessTo:directory); output.selectTabViewItem(at:1); return
+        }
+        let names = ["minutes.md","transcript.md","mindmap.mmd","agent-context.md","deep.md"]
         text.string = (try? String(contentsOf:directory.appendingPathComponent(names[max(0,outputPicker.selectedSegment)]),encoding:.utf8)) ?? "这份资料尚未生成。未完成的录音可以选择“继续处理”。原稿进度保留在本地文件夹。"
         output.selectTabViewItem(at:0)
+    }
+    @objc private func tabChanged() { tabs.selectTabViewItem(at:tabPicker.selectedSegment) }
+    @objc private func toggleCloud() { refreshState() }
+    @objc private func disableCloud() {
+        controller.settings["cloud_enabled"] = false; controller.settings["summary_mode"] = "local"
+        do { try controller.saveSettings(); controller.showMessage("已停用云端增强，新会议仅在本机处理。已生成资料保留。") } catch { controller.showError(error) }
+        refreshState()
     }
     @objc private func enableChanged() {
         controller.settings["enabled"] = enable.state == .on
@@ -182,7 +214,6 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     @objc private func optionsChanged() {
         controller.settings["diarization"] = diarization.state == .on
         controller.settings["retain_audio"] = retain.state == .on
-        controller.settings["summary_mode"] = mode.indexOfSelectedItem == 1 ? "cloud" : "local"
         do { try controller.saveSettings() } catch { controller.showError(error) }
         refreshState()
     }
@@ -193,9 +224,13 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
                   url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { throw VoiceError.message("请输入有效的 HTTPS API 地址，不要将密钥写在 URL 中") }
             guard !model.stringValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { throw VoiceError.message("请输入服务提供的模型名称") }
             if !key.stringValue.isEmpty { try MeetingKeychain.save(key.stringValue,endpoint:base); key.stringValue = "" }
+            guard !(MeetingKeychain.read(endpoint:base) ?? "").isEmpty else { throw VoiceError.message("请输入 API Key 后保存") }
+            controller.settings["cloud_enabled"] = true
+            controller.settings["summary_mode"] = "local"
+            controller.settings["writing_style"] = String(writingStyle.stringValue.prefix(600))
             controller.settings["base_url"] = base; controller.settings["model"] = model.stringValue.trimmingCharacters(in:.whitespacesAndNewlines)
             try controller.saveSettings()
-            controller.showMessage("云端配置已保存。下次处理会议时发送转写文字，音频仍在本机。")
+            controller.showMessage("云端增强已启用。下次先生成本地基础资料，再发送纪要和引文进行深度整理。")
         } catch { controller.showError(error) }
         refreshState()
     }

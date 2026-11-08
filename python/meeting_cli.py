@@ -15,7 +15,7 @@ def main(argv=None):
     sub = meeting.add_subparsers(dest='action', required=True)
     sub.add_parser('list')
     show = sub.add_parser('show'); show.add_argument('id')
-    show.add_argument('--format', choices=['json', 'minutes', 'transcript', 'mindmap', 'agent'], default='json')
+    show.add_argument('--format', choices=['json', 'minutes', 'transcript', 'mindmap', 'agent', 'deep'], default='json')
     search = sub.add_parser('search'); search.add_argument('query'); search.add_argument('--id'); search.add_argument('--limit', type=int, default=30)
     segments = sub.add_parser('segments'); segments.add_argument('id'); segments.add_argument('--offset', type=int, default=0); segments.add_argument('--limit', type=int, default=30)
     segments.add_argument('--from-seconds', type=float, default=0); segments.add_argument('--to-seconds', type=float, default=float('inf'))
@@ -30,7 +30,9 @@ def main(argv=None):
     if args.action == 'list':
         result = store.list()
     elif args.action == 'show':
-        files = {'minutes': 'minutes.md', 'transcript': 'transcript.md', 'mindmap': 'mindmap.mmd', 'agent': 'agent-context.md'}
+        files = {'minutes': 'minutes.md', 'transcript': 'transcript.md', 'mindmap': 'mindmap.mmd', 'agent': 'agent-context.md', 'deep': 'deep.md'}
+        if args.format == 'deep' and store.read(args.id).get('deep') is None:
+            raise ValueError('该会议尚无有效的深度整理版本')
         if args.format in files:
             print((store.directory(args.id) / files[args.format]).read_text()); return 0
         result = store.read(args.id)

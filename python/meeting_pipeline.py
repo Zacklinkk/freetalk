@@ -30,7 +30,7 @@ def normalize_audio(source, target):
     os.chmod(target, 0o600)
 
 
-def intervals(duration, turns, maximum=20.0):
+def intervals(duration, turns, maximum=20.0, minimum=4.0):
     points = {0., duration}
     for row in turns:
         points.update((max(0., min(duration, row['start'])), max(0., min(duration, row['end']))))
@@ -44,10 +44,11 @@ def intervals(duration, turns, maximum=20.0):
             spans[-1][1] = b
         else:
             spans.append([a, b, active])
-    # Very short changes cannot reliably be transcribed alone; preserve uncertainty.
+    # Keep the acoustic context of short interjections. Speaker turns remain
+    # separate metadata; they must not force 100 ms ASR windows.
     compact = []
     for a, b, active in spans:
-        if compact and b - a < .4 and b - compact[-1][0] < maximum:
+        if compact and (b-a < minimum or compact[-1][1]-compact[-1][0] < minimum) and b-compact[-1][0] <= maximum:
             compact[-1][1] = b
             compact[-1][2] = sorted(set(compact[-1][2]) | set(active))
         else:
@@ -56,6 +57,11 @@ def intervals(duration, turns, maximum=20.0):
         n = max(1, math.ceil((b-a) / maximum))
         for i in range(n):
             yield a + (b-a)*i/n, a + (b-a)*(i+1)/n, active
+
+
+def overlap_duration(turns):
+    points = sorted({p for t in turns for p in (t['start'],t['end'])})
+    return sum(b-a for a,b in zip(points,points[1:]) if len({t['speaker'] for t in turns if t['start']<b and t['end']>a})>1)
 
 
 def validate_segments(rows):
@@ -112,23 +118,17 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
     retain = bool(settings.get('retain_audio', False))
     summary_mode = settings.get('summary_mode', 'local')
     try:
-        if summary_mode == 'cloud':
-            # Explicit settings, no auto-fallback that uploads local work on failure.
-            generate = cloud_generator(settings.get('base_url', ''), settings.get('model', ''), payload.get('api_key', ''))
-            summary_model = settings.get('model', '')
-        elif summary_mode == 'local':
-            if engine is None:
-                from mlx_lm import load
-                model, tokenizer = load(config['cleanupModel'], tokenizer_config={'trust_remote_code': False})
-                generate = local_generator(model, tokenizer)
-            else:
-                generate = local_generator(engine.editor.model, engine.editor.tokenizer)
-            summary_model = Path(config['cleanupModel']).name
+        # Basic minutes always remain local. Cloud writing is a separate derived layer.
+        if engine is None:
+            from mlx_lm import load
+            model, tokenizer = load(config['cleanupModel'], tokenizer_config={'trust_remote_code': False})
+            generate = local_generator(model, tokenizer)
         else:
-            raise ValueError('不支持的会议整理方式')
+            generate = local_generator(engine.editor.model, engine.editor.tokenizer)
+        summary_model = Path(config['cleanupModel']).name
         timings['summary_model_setup_seconds'] = round(time.monotonic()-started,3)
         store.update(meeting_id, status='processing', stage='preparing', error=None,
-                     summary_provider=summary_mode, summary_model=summary_model,
+                     summary_provider='local', summary_model=summary_model,
                      requested_audio_retention=retain)
         if payload.get('transcript_path'):
             progress(stage='import', message='导入带时间戳的转写')
@@ -202,7 +202,10 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
                         text = result.text.strip()
                         if text:
                             row = dict(id=f's{len(segments)+1:06}', start=round(a,3), end=round(b,3), text=text,
-                                       speaker_ids=speakers, speaker_status='multiple_or_overlap' if len(speakers)>1 else 'model' if speakers else 'unknown', timestamp_precision='segment')
+                                       speaker_ids=speakers, speaker_status='multiple_speakers' if len(speakers)>1 else 'model' if speakers else 'unknown', timestamp_precision='segment')
+                            row['speaker_turns'] = [dict(start=max(a,t['start']),end=min(b,t['end']),speaker=t['speaker']) for t in turns if t['start']<b and t['end']>a]
+                            row['overlap_seconds'] = round(overlap_duration(row['speaker_turns']),3)
+                            if row['overlap_seconds'] > 0: row['speaker_status'] = 'overlap'
                             store.append_segment(meeting_id, row); segments.append(row)
                     store.update(meeting_id, stage='transcribe', processed_until_seconds=b, segment_count=len(segments))
                     progress(stage='transcribe', completed=b, total=info.duration, message=f'转写 {int(b)} / {int(info.duration)} 秒')
@@ -217,9 +220,30 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
         timings['summary_and_mindmap_seconds'] = round(time.monotonic()-stage_start,3)
         if not segments:
             minutes['warnings'].append('未得到有效语音转写；请检查录音内容和输入设备。')
-        if any(s.get('speaker_status') == 'multiple_or_overlap' for s in segments):
+        if any(s.get('speaker_status') in {'multiple_or_overlap','multiple_speakers','overlap'} for s in segments):
             minutes['warnings'].append('部分片段包含多个说话人或重叠，未把每个词强行分配给某个人。')
         source_digest = render_bundle(store, meeting_id, minutes, tree)
+        # A cloud failure must not discard or mark the usable local bundle as failed.
+        from meeting_deep import configured, deepen, render_deep
+        deep_status = 'not_configured'
+        if configured(settings):
+            progress(stage='deep', message='基础纪要已完成，开始可选的云端深度整理')
+            store.update(meeting_id, stage='deep', deep_status='processing')
+            stage_start = time.monotonic()
+            try:
+                cloud = cloud_generator(settings['base_url'], settings['model'], payload.get('api_key', ''))
+                enhanced = deepen(minutes, cloud, settings.get('writing_style', ''), progress)
+                enhanced['model'] = settings['model']
+                render_deep(directory, enhanced)
+                deep_status = 'complete'
+                store.update(meeting_id, deep_error=None)
+            except Exception:
+                deep_status = 'failed'
+                store.update(meeting_id, deep_error='云端深度整理未完成。请检查连接、模型和密钥；本地基础资料不受影响。')
+                minutes['warnings'].append('云端深度整理未完成，本地基础资料已保存。')
+                render_bundle(store, meeting_id, minutes, tree)
+            timings['deep_seconds'] = round(time.monotonic()-stage_start,3)
+        store.update(meeting_id, deep_status=deep_status)
         if audio_path.exists() and not retain:
             audio_path.unlink()
         store.update(meeting_id, status='complete', stage='complete', source_digest=source_digest,

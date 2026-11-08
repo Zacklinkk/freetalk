@@ -173,6 +173,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             else if self.window.isVisible { self.resultView.string = text }
         }
         hotkey.onToggle = { [weak self] in self?.toggle() }
+        hotkey.onMeeting = { [weak self] in
+            guard let self = self else { return }
+            if self.meetings.recording || self.meetings.preparing { self.meetings.stopRecording(process:true) }
+            else if self.meetings.enabled { self.meetings.startRecording(title:"") }
+            else { self.showMeetings(); self.meetings.showMessage("请先启用会议资料。之后右 Option + M 可开始或结束会议录音。") }
+        }
         hotkey.onEscape = { [weak self] in self?.cancelRecording() }
         updateHotkey()
         ticks = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -350,6 +356,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func recheckPermissions() { updateHotkey(); prepareSelectedDevice(); refreshPermissions() }
     @objc func revealApplication() { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
+    @objc func testInsertion() {
+        guard phase == .idle, !meetings.busy, !inserter.busy, !appUpdater.installing else { return }
+        phase = .preparing; session = UUID(); let token = session
+        setStatus("5秒后测试输入，请切回目标输入框。只插入测试文字，不发送。")
+        timer = Timer.scheduledTimer(withTimeInterval:5,repeats:false) { [weak self] _ in
+            guard let self = self, self.session == token, self.phase == .preparing else { return }
+            self.phase = .idle
+            do {
+                let snapshot = try InputSnapshot.capture()
+                guard let snapshot = snapshot, snapshot.pid != ProcessInfo.processInfo.processIdentifier else {
+                    let foreground = NSWorkspace.shared.frontmostApplication
+                    let node = foreground.flatMap { focusedElement($0.processIdentifier) }
+                    let role = node.flatMap { axAttribute($0,kAXRoleAttribute) as? String } ?? "未知"
+                    let readable = node.flatMap { axAttribute($0,kAXValueAttribute) as? String } != nil
+                    let caret = node.flatMap { selection($0) } != nil
+                    self.setStatus("未锁定输入框 · \(foreground?.localizedName ?? "未知应用") · \(role) · 文字\(readable ? "可读" : "不可读") · 光标\(caret ? "可读" : "不可读")")
+                    return
+                }
+                self.inserter.insert("freetalk 输入测试",into:snapshot) { ok,message in
+                    self.setStatus(ok ? "输入测试成功 · \(snapshot.name) · 原草稿已保留" : "输入测试：\(message)")
+                }
+            } catch { self.setStatus(error.localizedDescription) }
+        }
+    }
     @objc func delayedStart() {
         guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !meetings.busy, !appUpdater.installing else { return }
         phase = .preparing; session = UUID(); let token = session

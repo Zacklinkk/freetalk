@@ -86,12 +86,43 @@ def normalize_spelling(raw, context):
             return match[0]
         count += 1
         return known[key]
-    return LETTERS.sub(replace, raw), count
+    text = LETTERS.sub(replace, raw)
+    text, versions = normalize_known_versions(text, context)
+    return text, count + versions
+
+
+def normalize_known_versions(raw, context):
+    """Render a spoken version only if that exact identifier is present in context.
+
+    This joins literal spellings and number names, never guesses a different term.
+    """
+    digits = {'0':'(?:0|零|〇|zero)', '1':'(?:1|一|幺|one)', '2':'(?:2|二|two)',
+              '3':'(?:3|三|three)', '4':'(?:4|四|four)', '5':'(?:5|五|five)',
+              '6':'(?:6|六|six)', '7':'(?:7|七|seven)', '8':'(?:8|八|eight)', '9':'(?:9|九|nine)'}
+    known = []
+    for row in context.get('terms', []):
+        term = row.get('term','')
+        if re.fullmatch(r'[A-Za-z][A-Za-z-]{0,30}[0-9]+(?:\.[0-9]+)*',term):
+            known.append(term)
+            # A hyphenated model name can provide its own exact version suffix.
+            if '-' in term and re.fullmatch(r'[A-Z][0-9]+(?:\.[0-9]+)*',term.rsplit('-',1)[-1]):
+                known.append(term.rsplit('-',1)[-1])
+    count = 0
+    for term in sorted(set(known),key=len,reverse=True):
+        spans = [(m.start(),m.end()) for m in LITERALS.finditer(raw)]
+        pattern = r'(?<![A-Za-z0-9_])' + r'[ \t]*'.join(digits.get(c, r'(?:\.|点)' if c=='.' else r'(?:-|[ \t])?' if c=='-' else re.escape(c)) for c in term) + r'(?![A-Za-z0-9_.])'
+        def replace(match):
+            nonlocal count
+            if any(match.start()<b and match.end()>a for a,b in spans): return match[0]
+            if match[0] != term: count += 1
+            return term
+        raw = re.sub(pattern, replace, raw, flags=re.I)
+    return raw,count
 
 
 def hotwords(context):
     """Bound the ASR prompt; contextual terms rank ahead of unrelated personal words."""
-    background = context.get('initial', '') + '\n' + context.get('latest', '')
+    background = '\n'.join(context.get(k,'') for k in ('initial','latest','window_title','nearby'))
     terms = [row['term'] for row in context.get('terms', [])]
     relevant = [term for term in terms if term.casefold() in background.casefold()]
     return list(dict.fromkeys(relevant + terms))[:MAX_ACTIVE_TERMS]

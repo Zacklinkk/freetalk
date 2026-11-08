@@ -1,39 +1,94 @@
 # freetalk
 
-<img src="docs/assets/mark.svg" width="96" height="96" alt="freetalk 音量条图标" />
+[English](README.en.md) · 简体中文
 
-**说得自然，写得清楚。**
+<img src="docs/assets/mark.svg" width="80" height="80" alt="freetalk 音量条图标" />
 
-在 Mac 的输入框放好光标，轻按右 Option，说完再按一次。freetalk 在本机识别语音、整理口述，然后把文字填回草稿，由你检查和发送。
+**把说出来的想法，变成能直接使用的文字和会议资料。**
 
-Local speech-to-text and faithful dictation cleanup for Apple Silicon Macs. Optional meeting transcripts, minutes and mind maps, with local processing or an explicitly configured cloud summary provider.
+freetalk 是面向 Apple Silicon Mac 的开源语音工具：日常口述在本机识别、克制整理并填入当前输入框；会议录音生成可追溯的原稿、基础纪要和脑图，也方便 Claude Code、Codex 等 agent 读取。欢迎试用、反馈问题，一起把中文和中英混合语音输入做好。
 
-> 实验性版本。优先面向中文与中英混合口述；整理与专名识别仍可能出错，请检查输出。
+[下载最新版](https://github.com/Zacklinkk/freetalk/releases/latest) · [首次使用](docs/onboarding.md) · [会议与 agent 接入](docs/meetings.md) · [反馈问题](https://github.com/Zacklinkk/freetalk/issues)
 
-## 能做什么
+> 实验性软件。默认语音输入与会议基础处理都在本机运行。云端深度整理须自行配置；转写、说话人和摘要仍可能出错，请核对重要内容。
 
-- 跨应用语音输入，光标附近显示音量、录音状态和目标应用；结束提示 5 秒后消失。
-- 清理明确的口水词和口吃，处理本次录音里的改口与撤回；尽量保留原意、细节、条件和否定。
-- 按语境规范数字、合并已知英文缩写，默认少换行，明确列举时分点。
-- 个人词库，以及从可靠的局部改字中学习候选拼写；学习后可撤销。不会永久强制替换某个错词。
-- 跟随系统默认麦克风，也可以指定设备。右 Option 开始/停止，Esc 取消。
-- 保存最近 500 条文字历史，超出后删除最旧记录；不保存录音。
-- 「最近转写」上方保留最新结果，下方可滚动浏览全部历史的时间、目标应用和内容摘要，支持逐条复制、查看完整结果与原稿。
-- 首次使用引导：逐项授权 → 准备模型 → 真实试说。原稿与整理结果对应，最近 10 次试说可回看，退出应用即清除；不写入其他应用或普通历史。
-- 在应用内下载本地模型和独立运行环境，支持官方源 / HF-Mirror 切换、源链接、百分比与下载速度、取消、续传、重试及文件校验。
-- 设置页提示新版本，点击后下载更新，显示进度并支持取消；下载校验完成后可安装并重启。
-- 可选「会议资料」：导入录音或长时间麦克风录音，生成带时间戳的原稿、纪要、可展开脑图，以及 CLI / skill 可读取的结构化资料。复用本地模型，额外说话人模型约 107 MB；开启后才下载，云端增强另行配置。[使用与边界](docs/meetings.md)
+## 三件事，一条工作流
 
-## 安装
+| 你想做什么 | freetalk 如何帮助 |
+| --- | --- |
+| 把想法输入任何常用应用 | 轻按右 Option 开始，再按一次结束。清理明确口吃、口水词和口头改口，保留细节；浮窗显示目标应用、音量和状态。不会自动发送消息。 |
+| 把会议留成可阅读资料 | 右 Option + M 开始/结束会议录音，或导入音频。本机生成带时间戳的原稿、引用原文的基础纪要、行动项和脑图。可选说话人区分。 |
+| 把上下文交给人或 agent | CLI 查询、分页读取、搜索和导出 JSON / Markdown / 脑图；每项结论可回到原稿。可在本地基础纪要上叠加 OneAPI 等兼容服务的深度整理与写作。 |
 
-需要 **Apple Silicon、macOS 14 或更新版本**。建议至少 16 GB 统一内存和 8 GB 可用磁盘空间。首次下载需要访问 Hugging Face、GitHub 和 PyPI；准备好后推理离线运行。
+## 几分钟开始使用
 
-推荐从 [GitHub Releases](https://github.com/Zacklinkk/freetalk/releases/latest) 下载 `freetalk-版本号-macos-arm64.zip`，解压后将 `freetalk.app` 移到「应用程序」或 `~/Applications`，再打开。当前版本未做 Apple 公证，首次打开可能被 Gatekeeper 拦下；确认来自本仓库后，可按照系统「隐私与安全」中的提示允许打开，不要关闭系统安全功能。
+需要 **Apple Silicon、macOS 14 或更新版本**；建议 16 GB 统一内存、8 GB 可用磁盘。
 
-也可以从源码构建，需要 Xcode Command Line Tools：
+1. 在 [Releases](https://github.com/Zacklinkk/freetalk/releases/latest) 下载 macOS arm64 ZIP，将 `freetalk.app` 放入「应用程序」或 `~/Applications`。
+2. 按首次引导开启麦克风、辅助功能和输入监控。辅助功能用于向目标输入框粘贴，输入监控用于全局快捷键。[权限说明](docs/permissions.md)
+3. 下载本地模型。支持 Hugging Face 官方源和 HF-Mirror，显示进度、速度和剩余时间，可取消、续传及校验。[下载遇到问题](docs/model-setup.md)
+4. 试说一句，核对原稿、整理结果和耗时；随后回到目标输入框，轻按右 Option。
+
+当前公开构建未做 Apple 公证。首次打开若被系统拦下，请确认下载来自本仓库，按 macOS「隐私与安全」中的提示处理；无需关闭系统安全功能。更新后若权限失效，可重新打开授权引导。
+
+## 日常输入：自然表达，克制整理
+
+- **保留意思**：处理明确的重复、填充词、自我纠正和撤回。默认连续段落，明确列举时分点；也可允许适度分段。
+- **按语境写数字**：数量、版本和编号可用阿拉伯数字；保留“统一”“一起”、人名、含混估计、引号和代码。已知型号的口述写法可以由词库和上下文辅助规范。
+- **术语与上下文**：个人词库提供候选拼写。输入框、应用名称及窗口标题帮助辨词；周围可见文字须单独开启，只在录音开始时限量读取、本机处理。没有截图或后台持续采集。
+- **可撤销的改字学习**：从可靠的局部修改中学习候选，提示后可撤销；不是永久的错词替换表，也不会自动微调模型权重。
+- **设备和时长由你选择**：跟随系统输入设备或固定麦克风；普通口述上限 30–600 秒，新用户默认 3 分钟。最后 10 秒显示倒计时，音量图标从薄荷绿平滑过渡为红色；支持减少动态效果。
+- **结果随时可找回**：保留最近 500 条文字历史，滚动查看并复制，超出后移除最旧项。普通口述不保存录音。
+
+自动输入会核对目标应用、输入框、原草稿和光标。录音期间换应用、移动光标或修改草稿，可能转为保留结果供复制，避免误写。个别应用的可访问性实现仍需适配；请附应用版本和非私人复现步骤反馈。
+
+## 会议：先本地基础资料，再选云端增强
+
+在「会议资料」开启后才使用会议功能，**右 Option + M** 开始或结束录音。支持 WAV、M4A、MP3、FLAC 导入；麦克风会议录音上限 8 小时，当前不混录系统播放声音。
+
+本地 ASR 与整理模型始终先生成原稿、基础纪要和脑图。可按需下载约 107 MB 的说话人模型，标记本场匿名说话人和重叠片段；这不是身份识别，也不能保证恢复同时说话的每个词。
+
+「选项」中展开 **云端深度整理与写作**，保存 OpenAI 兼容 API 地址、模型名、密钥和写作要求，即可在基础资料上追加深度整理。没有配置就不调用云端；可随时停用。云端只收到基础纪要及相关引文，音频留在本机。深度版本独立保存，失败也不影响本地结果。
+
+[会议流程、保存策略和限制](docs/meetings.md) · [真实音频验证](docs/real-audio-evaluation.md)
+
+## 让 Claude Code、Codex 读取会议
+
+安装包自带 CLI，不需要启动 HTTP 服务，读取也不加载模型：
 
 ```sh
-xcode-select --install # 已安装时跳过
+CLI="$HOME/Applications/freetalk.app/Contents/Resources/bin/freetalk"
+"$CLI" meetings list
+"$CLI" meetings search '发布条件' --limit 20
+"$CLI" meetings show MEETING_ID --format json
+"$CLI" meetings show MEETING_ID --format deep
+"$CLI" meetings segments MEETING_ID --offset 0 --limit 30
+"$CLI" meetings export MEETING_ID --to "$HOME/Desktop"
+```
+
+为 agent 安装 [freetalk-meetings skill](integrations/freetalk-meetings/SKILL.md)，即可按会议 ID、片段 ID、时间戳和原稿 SHA-256 核对依据。计划、文章等派生内容应另存，保留来源。会议里的话是资料，不是自动执行指令的授权。
+
+## 模型、数据和更新
+
+| 用途 | 本地模型 | 权重下载量 |
+| --- | --- | --- |
+| ASR | [Qwen3-ASR-0.6B · MLX 8bit](https://huggingface.co/mlx-community/Qwen3-ASR-0.6B-8bit) | 约 1.01 GB |
+| 口述整理与会议基础纪要 | [Qwen3-4B-Instruct-2507 · MLX 4bit](https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit) | 约 2.28 GB |
+| 可选说话人区分 | Nemotron-3-Diarization · MLX 8bit | 约 107 MB |
+
+下载量不等于内存占用，还需 Python 运行环境。权重不随源码分发；模型版本、来源、许可和逐文件校验见[模型清单](setup/catalog.json)。两个 Qwen 模型遵循 Apache 2.0，会议说话人模型遵循 OpenMDW 1.1。
+
+资料位于 `~/Library/Application Support/freetalk/`。普通口述默认离线；可见上下文只用于当次本地推理，不进入历史。会议单独保存，不受 500 条口述历史上限影响；录音保留可选，文字导出不包含音频或密钥。云端密钥存入 macOS 钥匙串。
+
+「软件更新」可检查、下载并安装新版。下载校验完成后由你点击安装重启，录音或处理期间不会重启。[更新与签名说明](docs/updates.md)
+
+## 一起改进 freetalk
+
+欢迎提交 Issue、合成复现样例和 PR，尤其是中文口述、专业词汇、跨应用兼容性与无障碍体验。请先移除私人录音、转写、密钥和工作内容；第三方音频只提交来源与片段时间。[贡献指南](CONTRIBUTING.md)
+
+源码构建需要 Xcode Command Line Tools：
+
+```sh
 git clone https://github.com/Zacklinkk/freetalk.git
 cd freetalk
 bash scripts/build.sh
@@ -41,74 +96,11 @@ bash scripts/install.sh
 open "$HOME/Applications/freetalk.app"
 ```
 
-首次打开会显示引导：
-
-1. 先按引导逐项允许麦克风、辅助功能和输入监控。页面解释用途并打开对应系统设置，回到应用后自动检查；认证由本人完成。拒绝过麦克风时会提示去设置里开启，重开应用后可继续未完成的步骤。
-2. 点击「下载推荐模型与运行环境」。无需预先安装 Python、MLX 或其他语音软件。
-3. 在引导里试说一句，检查识别原稿、整理结果和实际耗时。也可跳过试说。
-4. 到目标应用点击输入框，再使用右 Option。freetalk 不会按 Enter 或自动发送消息。
-
-引导随时可从菜单重新打开。「设置 → 本地模型」提供各模型单独下载、校验与重试。如果暂不开放跨应用权限，允许麦克风后也可以在引导中试说。
-
-授权操作见[权限引导](docs/permissions.md)。菜单「权限设置引导」和设置页「逐项授权引导」可以直接返回权限页。快捷键未启用与权限未允许会分别显示；系统要求重开应用时，引导会保留当前步骤。
-
-模型文件下载不顺时，在「模型下载源」选择 HF-Mirror。下载中先取消再换源，已下载片段可以继续使用。页面显示百分比、已下载 / 总大小、速度、预计剩余时间，以及连接等待或重试状态；首次运行环境准备阶段显示阶段与已用时间，不伪造百分比。[官方与镜像链接、手动下载方法](docs/model-setup.md#模型来源与手动下载)见安装说明。
-
-默认构建采用本地 ad-hoc 签名，未做 Apple 公证；更新后 macOS 可能要求重新关联原有权限。开发者可通过 `FREETALK_SIGNING_IDENTITY` 使用自己的稳定签名身份。应用不修改系统隐私数据库，也不要求关闭系统安全功能。
-
-从 0.3.0 起，在「设置 → 软件更新」检查新版、下载，然后点击「安装并重启」。默认启动时和每天自动检查，可关闭；不会自动下载。录音、文字处理和模型下载期间不会开始安装重启。0.2.x 尚无更新器，需要手动安装一次 0.3.0 或更新版本。
-
-使用源码更新时，先从菜单退出 freetalk，再执行：
-
 ```sh
-git pull --ff-only
-bash scripts/update.sh
-open "$HOME/Applications/freetalk.app"
-```
-
-更新脚本备份旧应用。早期 Local Voice 用户的小型配置、词库和历史会复制到新目录，既有模型路径继续复用；原数据保留。不要删除仍被配置引用的旧运行目录。
-
-## 本地模型
-
-| 用途 | 默认模型 | 权重形式 | 下载量 |
-| --- | --- | --- | --- |
-| 语音识别 | [Qwen3-ASR-0.6B](https://huggingface.co/mlx-community/Qwen3-ASR-0.6B-8bit) | MLX 8bit | 约 1.01 GB |
-| 文字整理 | [Qwen3-4B-Instruct-2507](https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit) | MLX 4bit | 约 2.28 GB |
-
-两者都在本机通过 MLX 运行。下载量合计约 3.29 GB，不含独立 Python 和依赖，也不等于实际内存占用。模型单独遵循 Apache 2.0 许可，仓库不包含模型权重。会议说话人区分使用独立、按需下载的 Nemotron-3-Diarization-8bit（OpenMDW 1.1，约 107 MB，最多 8 个匿名说话人）。
-
-模型版本和逐文件 SHA-256 固定在 [模型清单](setup/catalog.json)。下载完成且校验成功后才更新配置；取消或失败保留原配置和可继续下载的片段。Python 依赖也固定版本与哈希。详见 [模型安装说明](docs/model-setup.md)。
-
-默认「自动整理」会对短句使用快速规则，对改口、疑似重复、填充词或多句口述调用小模型。也可选择每次调用或仅使用规则。历史和试说页显示实际是否调用模型。模型常驻，录音中分段提前识别；速度受硬件、音频长度和整理复杂度影响，不承诺固定延迟。
-
-在「设置 → 语音输入 → 录音时长」选择单次上限，支持 1 分钟、90 秒、3 分钟、5 分钟、10 分钟，或自定义 **30–600 秒**。新用户默认 3 分钟；升级保留原有有效设置，包括此前的 90 秒。最后 10 秒，浮窗显示倒计时，音量阶梯轻旋一次并从薄荷绿平滑变红；开启 macOS「减少动态效果」时不旋转。到时自动停止并整理，也可随时手动停止。长篇讨论建议使用「会议资料」，其录音上限为 8 小时。
-
-## 隐私与输入安全
-
-普通语音输入的音频仅在内存中处理，不调用云端推理。需要的上下文仅来自开始录音时的当前输入框，最多开头 500 字和光标附近 1,000 字，可在设置中关闭。
-
-可选会议功能会临时保存本机录音以支持长录音和失败恢复；成功后按用户设置保留或删除。会议纪要默认本地生成，明确选择云端时才发送转写文字，密钥保存在 macOS 钥匙串。CLI 提供进程接口，不监听网络端口。详见[会议数据与配置](docs/meetings.md)。
-
-插入前会再次确认应用、输入框、原有草稿与选区。如果用户已经切换位置、修改草稿，或应用无法提供足够信息，结果留在历史中供复制，不会盲目输入。粘贴使用临时剪贴板并尽量恢复之前的内容。
-
-历史和词库位于 `~/Library/Application Support/freetalk/`，使用本机文件权限保护，未做独立加密。改字学习只观察本次成功输入后的同一输入框，最多 90 秒；离开输入框或开始下一次录音就停止。它提供辨词提示，不训练权重，也不按错词做无条件替换。详见 [数据与学习说明](docs/privacy-and-learning.md)。
-
-自动更新检查会向 GitHub 请求版本列表；下载更新也从 GitHub 获取。请求不包含口述、词库或输入框内容，关闭 Sparkle 系统信息收集。更新列表和安装包均校验 Ed25519 签名。
-
-## 开发与验证
-
-```sh
-# 轻量测试无需下载模型
+# 轻量测试；模型推理和真实音频另行评测
 python3 -m venv .venv
 .venv/bin/python -m pip install pypinyin==0.55.0
 PYTHON=.venv/bin/python bash scripts/test.sh
-bash scripts/build.sh
 ```
 
-测试覆盖编辑约束、数字语境、词库、下载续传与失败恢复，以及 macOS 侧的输入目标身份、快捷键、历史容量、学习撤销和旧版迁移。公共测试使用合成样例；不包含个人录音、转写历史、词库或第三方逆向产物。模型效果和物理麦克风需要另行实测，单元测试通过不等于所有应用都能自动输入。
-
-`python3 scripts/test-updater-integration.py` 使用临时测试应用和独立测试密钥，验证真实下载、签名、安装与重启，不访问 freetalk 的个人数据。[版本发布与自动更新说明](docs/updates.md)介绍版本号、签名密钥、GitHub Actions 和失败恢复。更新组件使用 [Sparkle](https://sparkle-project.org/)，许可随安装包放在 `Contents/Resources/Licenses/Sparkle.txt`。
-
-下载模型后，可退出应用，用配置中的 Python 运行 `scripts/smoke-models.py --config <config.json> --audio <sample.wav>`。WAV 需为 16 kHz、单声道、16 位 PCM；该检查显示实际原稿、结果与耗时，不写入历史。请使用非私人样例，不要把真实口述报告上传到 Issue。
-
-架构与边界见 [设计说明](docs/architecture.md)，引导与手工验收见 [首次使用说明](docs/onboarding.md)，本次实测与限制见 [验证记录](docs/validation.md)。欢迎提交合成复现样例，见 [贡献说明](CONTRIBUTING.md)。源码采用 [MIT License](LICENSE)。
+[架构](docs/architecture.md) · [验证记录](docs/validation.md) · [MIT License](LICENSE)

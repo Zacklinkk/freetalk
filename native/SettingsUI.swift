@@ -8,7 +8,12 @@ extension AppDelegate {
         box.contentViewMargins = NSSize(width: 18, height: 16)
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12
         stack.addArrangedSubview(label(title, size: 14)); if let subtitle = subtitle { stack.addArrangedSubview(label(subtitle, size: 12, color: .secondaryLabelColor)) }
-        for view in views { stack.addArrangedSubview(view) }
+        for view in views {
+            stack.addArrangedSubview(view)
+            if view is NSGridView || (view is NSTextField && !(view is NSSecureTextField)) {
+                view.widthAnchor.constraint(equalTo:stack.widthAnchor).isActive = true
+            }
+        }
         box.contentView = stack; return box
     }
     func settingsPage(_ title: String, subtitle: String, cards: [NSView], fillsHeight: Bool = false, scrollable: Bool = false) -> NSView {
@@ -43,9 +48,9 @@ extension AppDelegate {
         let tagline = label("你的本地语音输入", size: 11, color: .secondaryLabelColor); nav.addArrangedSubview(tagline)
         nav.setCustomSpacing(24, after: tagline)
         for (index, entry) in [("语音输入","mic"),("最近转写","text.bubble"),("常用词与学习","character.book.closed"),("本地模型","cpu"),("软件更新","arrow.triangle.2.circlepath"),("会议资料","person.3.sequence")].enumerated() {
-            let item = NSButton(title: entry.0, target: self, action: #selector(selectSettingsPage(_:)))
+            let item = SidebarButton(title: entry.0, target: self, action: #selector(selectSettingsPage(_:)))
             item.image = NSImage(systemSymbolName: entry.1, accessibilityDescription: nil); item.imagePosition = .imageLeading; item.imageHugsTitle = true
-            item.bezelStyle = .recessed; item.setButtonType(.pushOnPushOff); item.alignment = .left; item.tag = index
+            item.isBordered = false; item.setButtonType(.pushOnPushOff); item.alignment = .left; item.tag = index
             item.font = .systemFont(ofSize: 13, weight: .medium); nav.addArrangedSubview(item); item.widthAnchor.constraint(equalTo: nav.widthAnchor).isActive = true
             item.heightAnchor.constraint(equalToConstant: 36).isActive = true; sidebarButtons.append(item)
         }
@@ -67,13 +72,15 @@ extension AppDelegate {
         cleanupPicker.selectItem(at: max(0,min(2,UserDefaults.standard.integer(forKey: "cleanupMode")))); cleanupPicker.target = self; cleanupPicker.action = #selector(preferencesChanged); cleanupPicker.setAccessibilityLabel("整理方式")
         layoutPicker = NSPopUpButton(); layoutPicker.addItems(withTitles: ["连续段落 · 仅明确列举时分点","允许适度分段"])
         layoutPicker.selectItem(at: UserDefaults.standard.bool(forKey: "paragraphLayout") ? 1 : 0); layoutPicker.target = self; layoutPicker.action = #selector(preferencesChanged); layoutPicker.setAccessibilityLabel("文字排版")
-        contextButton = NSButton(checkboxWithTitle: "用当前输入框辅助辨词", target: self, action: #selector(preferencesChanged))
+        contextButton = NSButton(checkboxWithTitle: "用输入框、应用名称和窗口标题辅助辨词", target: self, action: #selector(preferencesChanged))
         contextButton.state = UserDefaults.standard.object(forKey: "contextEnabled") as? Bool == false ? .off : .on
-        shortcutButton = NSButton(checkboxWithTitle: "启用右 Option 快捷键", target: self, action: #selector(preferencesChanged))
+        shortcutButton = NSButton(checkboxWithTitle: "快捷键：右 Option 语音输入，右 Option + M 会议", target: self, action: #selector(preferencesChanged))
         shortcutButton.state = UserDefaults.standard.object(forKey: "shortcutEnabled") as? Bool == false ? .off : .on
-        let cleanupCard = card("文字与操作", views: [row([label("整理"),cleanupPicker]),row([label("排版"),layoutPicker]),row([contextButton,shortcutButton]),label("保留原意和细节。处理结束后，位置提示会在5秒后消失。",size:12,color:.secondaryLabelColor)])
+        let nearby = NSButton(checkboxWithTitle:"同时参考输入框周围的可见文字（仅本机）",target:self,action:#selector(windowContextChanged(_:)))
+        nearby.state = UserDefaults.standard.bool(forKey:"windowContextEnabled") ? .on : .off
+        let cleanupCard = card("文字与操作", views: [VoiceAppearance.form([("整理",cleanupPicker),("排版",layoutPicker)]),contextButton,nearby,shortcutButton,label("保留原意和细节。处理结束后，位置提示会在5秒后消失。",size:12,color:.secondaryLabelColor)])
         permissionsLabel = label("",size:11,color:.secondaryLabelColor)
-        let permissionCard = card("系统权限", views: [permissionsLabel,row([button("逐项授权引导",#selector(showPermissionGuide)),button("麦克风",#selector(requestMic)),button("辅助功能",#selector(requestAX)),button("输入监控",#selector(requestKeys))])])
+        let permissionCard = card("系统权限与输入兼容性", views: [permissionsLabel,row([button("逐项授权引导",#selector(showPermissionGuide)),button("麦克风",#selector(requestMic)),button("辅助功能",#selector(requestAX)),button("输入监控",#selector(requestKeys))]),button("5秒后测试输入",#selector(testInsertion)),label("切回目标输入框，将插入“freetalk 输入测试”，不会发送。",size:12,color:.secondaryLabelColor)])
         addSettingsPage(settingsPage("语音输入", subtitle: "说完即写入当前光标位置，保持你的表达。", cards:[statusCard,limitCard,micCard,cleanupCard,permissionCard],scrollable:true))
 
         resultView = NSTextView(); resultView.isEditable = false; resultView.isSelectable = true; resultView.isRichText = false
@@ -109,6 +116,7 @@ extension AppDelegate {
         sidebarButtons[0].state = .on; settingsTabs.selectTabViewItem(at:0); refreshUI()
     }
     private func addSettingsPage(_ page: NSView) { let item = NSTabViewItem(); item.view = page; settingsTabs.addTabViewItem(item) }
+    @objc func windowContextChanged(_ sender: NSButton) { UserDefaults.standard.set(sender.state == .on,forKey:"windowContextEnabled") }
     @objc func selectSettingsPage(_ button: NSButton) {
         settingsTabs.selectTabViewItem(at:button.tag)
         if button.tag == 1 { recentHistoryView?.refresh() }

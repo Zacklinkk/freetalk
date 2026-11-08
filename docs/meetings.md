@@ -1,6 +1,6 @@
 # 可选会议资料
 
-在「设置 → 会议资料」开启。默认关闭；不开启不会下载说话人模型、读取云端密钥或发出会议推理请求。
+在「设置 → 会议资料」开启。右 Option + M 开始或结束会议录音；普通右 Option 仍用于短口述。默认关闭；不开启不会下载说话人模型、读取云端密钥或发出会议推理请求。
 
 第一版支持导入 WAV / M4A / MP3 / FLAC，以及使用当前选定麦克风录音。会议录音不受普通口述的自定义时长限制，连续写入本机 WAV，单次上限 8 小时。电脑会议软件的播放声音可以先由会议软件导出，再导入处理；当前没有系统音频混录。
 
@@ -40,7 +40,11 @@
 
 ## 可选云端
 
-选择「云端增强」，填写 OpenAI-compatible `/v1` 地址、实际模型 ID 与 API Key。只在点击处理会议时发送转写文字；音频仍由本机转写。密钥存入 macOS 钥匙串，不写入配置 JSON、会议资料或日志。只允许 HTTPS（回环地址允许 HTTP），不跟随带鉴权的跨地址重定向。不会在本地失败时自动转云端。
+本地基础纪要和脑图始终先生成。展开「选项 → 云端深度整理与写作」，填写 OpenAI-compatible `/v1` 地址、实际模型 ID、API Key 和写作要求，点击保存后启用额外的云端版本。不是本地/云端二选一；未配置或点击停用后不调用云端。旧版仅保存过地址但仍选择本地的配置不会自动开启。
+
+云端只收到本地基础纪要及相关原文引文，音频仍在本机。结果另存为 `deep.json` / `deep.md` / `deep.html`，包含原稿 SHA-256、事实 ID 与原文引用。引用和数字校验只是防错约束，不是语义正确性的证明。云端失败会显示单独的错误，本地资料仍然可读；可以检查配置后继续处理。
+
+密钥存入 macOS 钥匙串，不写入配置 JSON、会议资料或日志。只允许 HTTPS（回环地址允许 HTTP），不跟随带鉴权的跨地址重定向。不会在本地失败时自动转云端。
 
 Gemini 支持结构化输出，见[官方说明](https://ai.google.dev/gemini-api/docs/structured-output)。兼容网关需要提供 `/chat/completions`、JSON object 响应格式和对应模型；不同网关的可用名称由用户服务决定，不内置私人地址或密钥。
 
@@ -53,6 +57,7 @@ CLI="$HOME/Applications/freetalk.app/Contents/Resources/bin/freetalk"
 "$CLI" meetings list
 "$CLI" meetings search '发布' --limit 20
 "$CLI" meetings show MEETING_ID --format json
+"$CLI" meetings show MEETING_ID --format deep
 "$CLI" meetings segments MEETING_ID --offset 0 --limit 30
 "$CLI" meetings segments MEETING_ID --from-seconds 120 --to-seconds 240
 "$CLI" meetings export MEETING_ID --to "$HOME/Desktop"
@@ -73,3 +78,10 @@ CLI 推理需先退出应用，避免重复占用 GPU。`meetings config --enabl
 `scripts/eval-meetings.py` 使用仓库内明确标记为 synthetic 的样例，支持本地或云端生成，报告依据有效率、脑图事实覆盖、关键字段检查与耗时。Gemini 生成的参考属于待核对的银标，不标记为人工 GT；正则检查通过不等于通用语义准确率。
 
 真实会议需要另做中文/中英混合、近场/远场、2/4/8 人、重叠语音和长时段验证：分别记录 CER/WER、相同标注协议下的 DER、行动项/负责人/期限准确率、否定与条件保留、事实遗漏、端到端时间和峰值内存。不要用清晰的合成声音成绩替代真实会议结果。
+
+
+## 短插话与重叠
+
+说话人切换保留为时间区间元数据，短插话合并为具有足够声学上下文的 ASR 窗口（尽量不少于 4 秒，上限 20 秒），避免把数百毫秒的声音孤立识别。多个说话人依次出现标为 `multiple_speakers`，实际检出的同时说话标为 `overlap`，并保存 `speaker_turns` 与 `overlap_seconds`；不逐字强行分配说话人。旧资料的 `multiple_or_overlap` 仍可读取。
+
+本轮公开访谈与真实四人会议的结果见[真实音频验证](real-audio-evaluation.md)。样本内延迟或 DER 不能代表完整数据集成绩。

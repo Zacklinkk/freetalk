@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'python'))
 from meeting_store import MeetingStore, atomic_json, render_bundle
 from meeting_summary import validate_facts, checked_groups, summarize, source_units, expand_references, parse_json
 from meeting_models import validate_endpoint
-from meeting_pipeline import intervals, validate_segments, run_meeting
+from meeting_pipeline import overlap_duration, intervals, validate_segments, run_meeting
 from meeting_cli import main
 
 
@@ -168,6 +168,13 @@ class MeetingTests(unittest.TestCase):
         for left, right in zip(spans, spans[1:]):
             self.assertAlmostEqual(left[1], right[0])
         self.assertTrue(all(b-a <= 20 for a, b, _ in spans))
+
+    def test_short_turns_keep_acoustic_context_and_overlap_is_distinct(self):
+        turns=[dict(start=i*.5,end=(i+1)*.5,speaker=str(i%3)) for i in range(40)]
+        spans=list(intervals(20,turns))
+        self.assertLessEqual(len(spans),5)
+        self.assertEqual(overlap_duration(turns),0)
+        self.assertAlmostEqual(overlap_duration([dict(start=0,end=5,speaker='a'),dict(start=3,end=7,speaker='b')]),2)
 
     def test_timestamps_and_endpoint_validation(self):
         with self.assertRaises(ValueError):

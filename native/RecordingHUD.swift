@@ -10,8 +10,8 @@ final class VoiceHUDButton: NSButton {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 final class VoiceSpectrum: NSView {
-    static let mint = NSColor(calibratedRed:0.53,green:0.91,blue:0.82,alpha:1)
-    static let warningRed = NSColor(calibratedRed:1,green:0.38,blue:0.42,alpha:1)
+    static let mint = NSColor.systemMint
+    static let warningRed = NSColor.systemRed
     var level: Float = 0 { didSet { needsDisplay = true } }
     var active = false { didSet { needsDisplay = true } }
     private(set) var warning = false
@@ -45,7 +45,7 @@ final class VoiceSpectrum: NSView {
         let amplitude=active ? min(1,max(0,CGFloat(level)*13)) : 0
         let progress = transitionStart.map { min(1, max(0, (CACurrentMediaTime() - $0) / transitionDuration)) } ?? 1
         let ease = progress * progress * (3 - 2 * progress)
-        let tint=active ? Self.mint.blended(withFraction:warning ? ease : 0,of:Self.warningRed)! : .white.withAlphaComponent(0.45)
+        let tint=active ? Self.mint.blended(withFraction:warning ? ease : 0,of:Self.warningRed)! : .tertiaryLabelColor
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         if warning && rotates && transitionStart != nil && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
@@ -77,19 +77,19 @@ final class RecordingHUD: NSObject {
         super.init()
         panel.title="freetalk · 录音位置提示"; panel.isFloatingPanel=true; panel.level = .floating
         panel.hidesOnDeactivate=false; panel.becomesKeyOnlyIfNeeded=true; panel.isReleasedWhenClosed=false
-        panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]; panel.isOpaque=false; panel.backgroundColor = .clear; panel.hasShadow=true
-        let surface=NSView(); surface.wantsLayer=true; surface.layer?.cornerRadius=34; surface.layer?.masksToBounds=true
-        surface.layer?.backgroundColor=NSColor(calibratedWhite:0.09,alpha:0.97).cgColor
-        surface.layer?.borderWidth=0.5; surface.layer?.borderColor=NSColor.white.withAlphaComponent(0.16).cgColor
+        panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]; panel.isOpaque=false; panel.backgroundColor = .clear; panel.hasShadow=false
+        let surface=NSVisualEffectView(); surface.material = .hudWindow; surface.state = .active; surface.blendingMode = .behindWindow; surface.wantsLayer=true; surface.layer?.cornerRadius=24; surface.layer?.masksToBounds=true
+        surface.layer?.backgroundColor=NSColor.windowBackgroundColor.withAlphaComponent(0.2).cgColor
+        surface.layer?.borderWidth=0.5; surface.layer?.borderColor=NSColor.separatorColor.cgColor
         panel.contentView=surface
-        title.font = .systemFont(ofSize:13,weight:.semibold); title.textColor = .white; title.lineBreakMode = .byTruncatingTail
-        destination.font = .systemFont(ofSize:10.5); destination.textColor = .white.withAlphaComponent(0.65); destination.lineBreakMode = .byTruncatingMiddle
-        clock.font = .monospacedDigitSystemFont(ofSize:11,weight:.medium); clock.textColor = .white.withAlphaComponent(0.7)
+        title.font = .systemFont(ofSize:13,weight:.semibold); title.textColor = .labelColor; title.lineBreakMode = .byTruncatingTail
+        destination.font = .systemFont(ofSize:10.5); destination.textColor = .secondaryLabelColor; destination.lineBreakMode = .byTruncatingMiddle
+        clock.font = .monospacedDigitSystemFont(ofSize:11,weight:.medium); clock.textColor = .secondaryLabelColor
         spectrum.setAccessibilityLabel("录音音量阶梯")
         spectrum.setAccessibilityElement(true); spectrum.setAccessibilityRole(.image)
-        icon.contentTintColor=NSColor(calibratedRed:0.53,green:0.91,blue:0.82,alpha:1)
-        action.target=self; action.action = #selector(primary); action.isBordered=false; action.font = .systemFont(ofSize:11,weight:.medium); action.contentTintColor = .white
-        cancel.title=""; cancel.image=NSImage(systemSymbolName:"xmark",accessibilityDescription:nil); cancel.target=self; cancel.action = #selector(closeAction); cancel.isBordered=false; cancel.contentTintColor = .white.withAlphaComponent(0.55)
+        icon.contentTintColor=NSColor.systemMint
+        action.target=self; action.action = #selector(primary); action.isBordered=false; action.font = .systemFont(ofSize:11,weight:.medium); action.contentTintColor = .labelColor
+        cancel.title=""; cancel.image=NSImage(systemSymbolName:"xmark",accessibilityDescription:nil); cancel.target=self; cancel.action = #selector(closeAction); cancel.isBordered=false; cancel.contentTintColor = .secondaryLabelColor
         cancel.setAccessibilityLabel("取消录音或关闭提示")
         for view in [spectrum,icon,title,destination,clock,action,cancel] as [NSView] { surface.addSubview(view); view.translatesAutoresizingMaskIntoConstraints=false }
         NSLayoutConstraint.activate([
@@ -115,6 +115,23 @@ final class RecordingHUD: NSObject {
         action.title=""; action.image=NSImage(systemSymbolName:"stop.circle.fill",accessibilityDescription:"停止录音")?.withSymbolConfiguration(.init(pointSize:20,weight:.regular)); action.setAccessibilityLabel("停止录音"); action.isEnabled=false
         panel.orderFrontRegardless()
     }
+    func showMeeting() {
+        show(target:nil)
+        originalDestination = "保存到会议资料 · 右 Option + M 结束"
+        destination.stringValue = originalDestination; title.stringValue = "准备会议录音"
+        action.isEnabled = true
+    }
+    func updateMeeting(level:Float,seconds:Double) {
+        guard panel.isVisible,!finished else { return }
+        title.stringValue = "会议录音"; destination.stringValue = originalDestination
+        clock.stringValue = String(format:"%02d:%02d",Int(seconds)/60,Int(seconds)%60)
+        spectrum.active = true; spectrum.level = level
+    }
+    func finishMeeting(_ message:String) {
+        finished = true; spectrum.active = false; title.stringValue = "会议录音已停止"
+        destination.stringValue = message; clock.stringValue = ""; action.isEnabled = false
+        scheduleHide()
+    }
     func update(recording:Bool,timing:DictationTiming,level:Float,stage:String,targetIssue:String?,anchor:CGRect?) {
         guard panel.isVisible,!finished else { return }
         if let anchor=anchor { self.anchor=anchor; position(anchor) }
@@ -123,7 +140,7 @@ final class RecordingHUD: NSObject {
         title.toolTip=recording ? "达到本次上限 \(DictationLimit.title(timing.limit)) 后自动停止并整理。" : stage
         clock.stringValue=recording ? (countdown.map { "\($0)s" } ?? String(format:"%02d:%02d",Int(timing.elapsed)/60,Int(timing.elapsed)%60)) : ""
         clock.setAccessibilityLabel(countdown == nil ? "录音时长" : "自动结束倒计时")
-        clock.textColor=countdown == nil ? .white.withAlphaComponent(0.7) : VoiceSpectrum.warningRed
+        clock.textColor=countdown == nil ? .secondaryLabelColor : VoiceSpectrum.warningRed
         spectrum.setWarning(countdown != nil)
         destination.stringValue=hasTarget && targetIssue != nil ? "位置已变化 · 暂不输入" : originalDestination
         destination.toolTip=targetIssue ?? originalDestination
@@ -149,7 +166,7 @@ final class RecordingHUD: NSObject {
     }
     private func scheduleHide() { hideTimer=Timer.scheduledTimer(withTimeInterval:5,repeats:false) { [weak self] _ in self?.hide() } }
     private func resetWarning() {
-        spectrum.setWarning(false, animated:false); clock.textColor = .white.withAlphaComponent(0.7)
+        spectrum.setWarning(false, animated:false); clock.textColor = .secondaryLabelColor
     }
     func hide() { hideTimer?.invalidate(); resetWarning(); panel.orderOut(nil); onDismiss?() }
     private func position(_ ax:CGRect?) {

@@ -1,5 +1,6 @@
 """Source-addressed changes. The model proposes; this module owns the text."""
 import difflib
+import json
 import re
 from functools import lru_cache
 from disfluency import LITERALS, START_CUE, EN_CUE, RESTART_HEAD, JOINED_CUE, adjacent_repetitions, correction_signal, strip_repair_cue
@@ -171,6 +172,19 @@ def repetition_cleanup(raw, old, new, start):
             if candidate == new: return True
     return False
 
+
+def repair_false_stops(text):
+    patches = []
+    pattern = r'(?P<left>[^。！？!?\n]{1,70}(?:把|将|以及|或者|包括|比如|例如|需要|希望|目标是|要求是|计划是|希望的是|希望的效果是|要用|用于|用来))[。]\s*(?P<right>[^。！？!?\s])'
+    for m in re.finditer(pattern,text):
+        start = m.start()+len(m['left']); end = m.start('right')
+        if not protected_span(text,m.start(),m.end()) and not re.search(r'说的是|意思是',m['left']):
+            patches.append((start,end,''))
+    for m in re.finditer(r'(^|[。！？!?\n])(?P<bridge>但是|然而|不过|因此|所以|另外|以及)[。](?=\S)',text):
+        a=m.end()-1
+        if not protected_span(text,m.start(),m.end()):patches.append((a,a+1,'，'))
+    return replace_spans(text,patches), len(patches)
+
 def preclean(raw, context=None):
     """Offset-addressed cheap edits also handle repeated identical filler tokens."""
     patches=[]
@@ -211,14 +225,17 @@ def preclean(raw, context=None):
         if word == '都' and re.search(r'[成首京古故陪帝魔大]$',raw[:m.start()]): continue
         if word == '就' and raw[:m.start()].endswith('成'): continue
         add(m.start(),m.end(),word)
-    for m in re.finditer(r'语(?=语义)|模(?=模型)|功(?=功能)|提(?=提示词)',raw):
+    for m in re.finditer(r'(?P<word>系统|功能|模型|我们|他们)(?P<prefix>系|功|模|我|他)(?P=word)',raw):
+        if m['word'].startswith(m['prefix']): add(m.start(),m.end(),m['word'])
+    for m in re.finditer(r'能(?=能不能)|可(?=可不可以)|需(?=需要)|操(?=操控)|系(?=系统)|分(?=分区)|语(?=语义)|模(?=模型)|功(?=功能)|提(?=提示词)',raw):
         add(m.start(),m.end(),'')
     # Exact adjacent restarts only. Near matches go to triage and retain new detail.
     for m in re.finditer(r'(?P<clause>[^，,。.!！?？;；\n]{5,60})[，,]\s*(?P=clause)',raw):
         if re.search(r'我|我们|先|需要|希望|应该|可以',m.group('clause')) and not re.search(r'非常|一定|千万|强调|真的', m.group('clause')):
             add(m.start(),m.end(),m.group('clause'))
     text=replace_spans(raw,patches)
-    return text,len(patches)
+    text, stops = repair_false_stops(text)
+    return text,len(patches)+stops
 
 def validate_repair(raw, item, patches):
     if not isinstance(item,dict) or set(item)!={'old','new','cue'}: raise ValueError('Invalid repair')
@@ -460,7 +477,7 @@ def apply_plan(raw, plan, context):
         # never duplicate that suffix or reinterpret a substantive replacement.
         if start>=0 and new and raw[end:].startswith(new) and contextual_cleanup(raw,old,'',start,edit.get('kind')):
             new=''
-        if core(old)==core(new) and any(p in old and p not in new for p in '。！？!?'):reason='sentence_boundary_change'
+        if core(old)==core(new) and any(p in old and p not in new for p in '。！？!?') and repair_false_stops(old)[0] != new:reason='sentence_boundary_change'
         if not reason and protected_span(raw,start,end):reason='literal_span'
         if not reason and rewrites_learned_alias(old,new,context):reason='learned_alias_requires_audio'
         discourse=contextual_cleanup(raw,old,new,start,edit.get('kind'))
@@ -532,3 +549,38 @@ def simple_layout(raw):
     if len(ids)>=2:
         return apply_plan(raw,{'edits':[],'breaks':[],'bullets':ids},{})[0]
     return raw
+
+
+def completed_edits(partial):
+    """Salvage only complete local edit objects from a truncated JSON response.
+
+    Never repair JSON strings, accept partial repairs/restarts, or execute a
+    truncated deletion. The caller still validates every source span and edit.
+    """
+    # The key must occur at top level, outside a JSON string. Decode preceding
+    # properties rather than searching for a key embedded in model text.
+    decoder = json.JSONDecoder(); pos = 0; text = partial.strip()
+    if not text.startswith('{'): return None
+    pos = 1
+    try:
+        while True:
+            while pos < len(text) and text[pos] in ' \r\n\t,': pos += 1
+            key, pos = decoder.raw_decode(text,pos)
+            while pos < len(text) and text[pos].isspace(): pos += 1
+            if pos >= len(text) or text[pos] != ':': return None
+            pos += 1
+            while pos < len(text) and text[pos].isspace(): pos += 1
+            if key != 'edits':
+                _,pos = decoder.raw_decode(text,pos);continue
+            if pos >= len(text) or text[pos] != '[': return None
+            pos += 1; edits = []
+            for _ in range(16):
+                while pos < len(text) and text[pos] in ' \r\n\t,': pos += 1
+                if pos >= len(text) or text[pos] == ']': break
+                try: item,pos = decoder.raw_decode(text,pos)
+                except ValueError: break
+                if not isinstance(item,dict) or not {'old','new'} <= item.keys(): return None
+                if not all(isinstance(item[k],str) for k in ('old','new')): return None
+                edits.append(item)
+            return {'repairs':[],'edits':edits,'breaks':[],'bullets':[]} if edits else None
+    except (ValueError,TypeError): return None
