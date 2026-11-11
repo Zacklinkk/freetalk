@@ -48,6 +48,36 @@ class VocabularyTests(unittest.TestCase):
         self.assertLessEqual(len(hotwords(ctx)),48)
         self.assertIn('Token190',hotwords(ctx));self.assertIn('API',hotwords(ctx))
 
+    def test_context_terms_rank_ahead_of_unrelated_vocabulary(self):
+        # The backend appends the list to the prompt as plain text, so order is
+        # the only weight. A term visible in the context must outrank earlier
+        # vocabulary entries that appear nowhere.
+        ctx=normalize_context({'personal_terms':['Token0','Token1','Token2','我的密码']})
+        ctx.update({'initial':'Token12','latest':'Token13','window_title':'我的密码','nearby':'Token14'})
+        ranked=hotwords(ctx)
+        self.assertEqual(ranked[0],'我的密码')
+        self.assertLess(ranked.index('我的密码'),ranked.index('Token0'))
+
+    def test_latin_context_match_requires_a_word_boundary(self):
+        # "API" must not match inside "CAPITAL".
+        inside=normalize_context({'personal_terms':['API'],'initial':'CAPITAL 大写'})
+        self.assertNotIn('API',[r for r in hotwords(inside) if r in ('CAPITAL',)])
+        standalone=normalize_context({'personal_terms':['zzz','API'],'initial':'调用 API 接口'})
+        self.assertEqual(hotwords(standalone)[0],'API')
+
+    def test_long_personal_terms_are_hintable(self):
+        # A fixed 2-4 character window can never surface a 5-character term.
+        from vocabulary import spelling_hints
+        ctx=normalize_context({'personal_terms':['星河知识库']})
+        self.assertEqual(spelling_hints('打开星禾知识库。',ctx),[['星禾知识库','星河知识库']])
+        self.assertEqual(spelling_hints('打开星河知识库。',ctx),[])
+
+    def test_hints_reach_errors_after_the_scan_prefix(self):
+        from vocabulary import spelling_hints
+        ctx=normalize_context({'personal_terms':['星河知识库']})
+        raw='前'*500+'打开星禾知识库。'
+        self.assertEqual(spelling_hints(raw,ctx),[['星禾知识库','星河知识库']])
+
     def test_fast_policy_preserves_sft_cleanup(self):
         editor=Editor.__new__(Editor)
         text,meta=editor.edit(SYNTHETIC_RAW,{},policy='fast')

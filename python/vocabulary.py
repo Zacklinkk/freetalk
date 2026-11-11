@@ -125,31 +125,50 @@ def normalize_known_versions(raw, context):
 
 
 def hotwords(context):
-    """Bound the ASR prompt; contextual terms rank ahead of unrelated personal words."""
+    """Bound the ASR prompt; contextual terms rank ahead of unrelated personal words.
+
+    The backend joins the list with ", " and appends it to the prompt, so order
+    is the only signal — there is no per-term weight. Terms that actually occur
+    in the visible context go first, ordered by where they first appear, then
+    the rest keep their vocabulary order.
+    """
     background = '\n'.join(context.get(k,'') for k in ('initial','latest','window_title','nearby'))
-    terms = [row['term'] for row in context.get('terms', [])]
-    relevant = [term for term in terms if term.casefold() in background.casefold()]
-    return list(dict.fromkeys(relevant + terms))[:MAX_ACTIVE_TERMS]
+    terms = list(dict.fromkeys(row['term'] for row in context.get('terms', []) if row.get('term')))
+
+    def position(term):
+        """Index of `term` in the context, or -1. Latin terms need a word boundary."""
+        if term.isascii() and any(c.isalpha() for c in term):
+            match = re.search(r'(?<![A-Za-z0-9_])' + re.escape(term) + r'(?![A-Za-z0-9_])', background, re.I)
+            return match.start() if match else -1
+        return background.casefold().find(term.casefold())
+
+    ranked = sorted(((position(term), index, term) for index, term in enumerate(terms)))
+    relevant = [term for at, _, term in ranked if at >= 0]
+    rest = [term for at, _, term in ranked if at < 0]
+    return (relevant + rest)[:MAX_ACTIVE_TERMS]
 
 
 def spelling_hints(raw, context):
     """Bounded near-sound pairs from supplied text, never automatic replacements."""
     from edits import grounded_spelling
     stop=set('的了是在我你他她它这那就也都和与有个对不没无非零一二两三四五六七八九十百千万')
+    known=list(dict.fromkeys(r['term'] for r in context.get('terms',[])))[:120]
+    # Candidate width must follow the vocabulary: a fixed 2-4 character window
+    # can never produce a 5-character term such as 星禾知识库, so longer
+    # personal names were silently unhintable.
+    sizes=sorted({len(term) for term in known if re.fullmatch(r'[\u4e00-\u9fff]{2,8}',term)}, reverse=True)
     def candidates(text):
         words=[]
         for match in re.finditer(r'[\u4e00-\u9fff]{2,}',LITERALS.sub(' ',text)):
             run=match[0]
-            for size in (2,3,4):
+            for size in sizes:
                 for i in range(len(run)-size+1):
                     word=run[i:i+size]
                     if not any(c in stop for c in word) and word not in words:words.append(word)
         return words
-    heard=candidates(raw[:600])[:80]
-    # Only curated/extracted whole terms are candidates. Overlapping Chinese
-    # n-grams can invent fragments such as 后但/后大 and distract the editor.
-    # The model still sees the full utterance and can spot grounded variants.
-    known=list(dict.fromkeys(r['term'] for r in context.get('terms',[])))[:120]
+    # Bound the scan but keep the tail reachable: sampling only the first 600
+    # characters dropped any error after that point.
+    heard=candidates(raw[:1200])[:200]
     pairs=[];seen=set()
     for old in heard:
         for new in known:
