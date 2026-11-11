@@ -3,6 +3,14 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "$0")/.." && pwd)"
 app_dir="$project_dir/build/freetalk.app"
 deployment_target=14.0
+# A stable local identity keeps TCC grants across rebuilds. Ad-hoc signatures
+# change their CDHash (and macOS treats the app as new) on every build.
+# Release builds set FREETALK_LOCAL_SIGNING=0 so published archives never
+# depend on the keychain of the machine that built them.
+if [ -z "${FREETALK_SIGNING_IDENTITY:-}" ] && [ "${FREETALK_LOCAL_SIGNING:-1}" != 0 ] \
+  && security find-identity -v -p codesigning 2>/dev/null | grep -q '"freetalk Local Signing"'; then
+  FREETALK_SIGNING_IDENTITY="freetalk Local Signing"
+fi
 sparkle_dir="$(bash "$project_dir/scripts/prepare-sparkle.sh")"
 rm -rf "$app_dir/Contents/Resources"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"

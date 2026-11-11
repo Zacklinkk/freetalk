@@ -52,7 +52,8 @@ def version_tuple(version):
 
 
 def prepare(output, info, tag, previous=None):
-    run('bash', str(ROOT/'scripts/build.sh'))
+    # A developer's self-signed identity must never reach published archives.
+    run('bash', str(ROOT/'scripts/build.sh'), env={**os.environ, 'FREETALK_LOCAL_SIGNING': '0'})
     app = ROOT/'build/freetalk.app'
     run('codesign', '--verify', '--deep', '--strict', str(app))
     output.mkdir(parents=True, exist_ok=True)

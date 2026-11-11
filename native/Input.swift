@@ -2,86 +2,424 @@ import AppKit
 import ApplicationServices
 import Carbon
 
-struct OptionTapState {
-    private var began: TimeInterval?
-    private var chord = false
-    mutating func keyDown() { if began != nil { chord = true } }
-    mutating func flags(code: Int, rightDown: Bool, otherModifiers: Bool, now: TimeInterval) -> Bool {
-        if code != 61 { if began != nil { chord = true }; return false }
-        if rightDown { began = now; chord = otherModifiers; return false }
-        let valid = began.map { now - $0 <= 0.45 && now >= $0 } ?? false
-        let fire = valid && !chord && !otherModifiers
-        began = nil; chord = false; return fire
+// MARK: - Hotkey model
+
+enum HotkeyModifier: Int, Codable, CaseIterable {
+    case leftCommand = 55, rightCommand = 54
+    case leftShift = 56, rightShift = 60
+    case leftOption = 58, rightOption = 61
+    case leftControl = 59, rightControl = 62
+    case function = 63
+
+    var genericFlag: CGEventFlags {
+        switch self {
+        case .leftCommand, .rightCommand: return .maskCommand
+        case .leftShift, .rightShift: return .maskShift
+        case .leftOption, .rightOption: return .maskAlternate
+        case .leftControl, .rightControl: return .maskControl
+        case .function: return .maskSecondaryFn
+        }
+    }
+    var deviceBit: UInt64 {
+        switch self {
+        case .leftCommand: return 0x08
+        case .rightCommand: return 0x10
+        case .leftShift: return 0x02
+        case .rightShift: return 0x04
+        case .leftOption: return 0x20
+        case .rightOption: return 0x40
+        case .leftControl: return 0x01
+        case .rightControl: return 0x2000
+        case .function: return 0
+        }
+    }
+    var display: String {
+        switch self {
+        case .leftCommand: return "左 Command"
+        case .rightCommand: return "右 Command"
+        case .leftShift: return "左 Shift"
+        case .rightShift: return "右 Shift"
+        case .leftOption: return "左 Option"
+        case .rightOption: return "右 Option"
+        case .leftControl: return "左 Control"
+        case .rightControl: return "右 Control"
+        case .function: return "Fn"
+        }
+    }
+    func isDown(in flags: CGEventFlags) -> Bool {
+        if self == .function { return flags.contains(.maskSecondaryFn) }
+        return flags.rawValue & deviceBit != 0
+    }
+    /// Physical modifiers held during an event. Side-specific keys are read
+    /// from the device bits of every event, so a release the tap never saw
+    /// cannot leave a modifier stuck. Arrow and function keys report the Fn
+    /// flag on their own, so Fn is only counted when its key was pressed.
+    static func held(in flags: CGEventFlags, function: Bool) -> Set<HotkeyModifier> {
+        var result = Set(allCases.filter { $0 != .function && flags.rawValue & $0.deviceBit != 0 })
+        if function { result.insert(.function) }
+        return result
+    }
+    static func ordered(_ modifiers: Set<HotkeyModifier>) -> [HotkeyModifier] {
+        [.leftControl, .rightControl, .leftOption, .rightOption, .leftShift, .rightShift, .leftCommand, .rightCommand, .function]
+            .filter { modifiers.contains($0) }
     }
 }
 
-// Only claim the physical right Option + M chord. A held key fires once,
-// and its matching key-up is consumed even if Option was released first.
-struct MeetingChordState {
-    private var claimed = false
-    mutating func event(code: Int, down: Bool, rightOption: Bool, otherModifiers: Bool, repeated: Bool) -> (consume: Bool, fire: Bool) {
-        guard code == 46 else { return (false, false) }
-        if !down { let was = claimed; claimed = false; return (was, false) }
-        if claimed { return (true, false) }
-        guard rightOption, !otherModifiers, !repeated else { return (false, false) }
-        claimed = true; return (true, true)
+struct HotkeyBinding: Codable, Equatable {
+    enum Trigger: Codable, Equatable {
+        case modifierTap(HotkeyModifier)
+        case chord(keyCode: Int, modifiers: [HotkeyModifier])
     }
+    var trigger: Trigger
+    init(trigger: Trigger) { self.trigger = trigger }
+
+    static let defaultDictation = HotkeyBinding(trigger: .modifierTap(.rightOption))
+    static let defaultMeeting = HotkeyBinding(trigger: .chord(keyCode: 46, modifiers: [.rightOption]))
+
+    var display: String {
+        switch trigger {
+        case .modifierTap(let modifier):
+            return modifier.display
+        case .chord(let keyCode, let modifiers):
+            let prefix = modifiers.map(\.display)
+            return (prefix + [HotkeyKeyName.name(for: keyCode)]).joined(separator: " + ")
+        }
+    }
+    var isModifierTap: Bool {
+        if case .modifierTap = trigger { return true }
+        return false
+    }
+    static func meetingFollowing(_ main: HotkeyBinding) -> HotkeyBinding? {
+        guard case .modifierTap(let modifier) = main.trigger else { return nil }
+        return HotkeyBinding(trigger: .chord(keyCode: 46, modifiers: [modifier]))
+    }
+    /// The meeting shortcut in effect for a dictation shortcut.
+    static func meeting(for dictation: HotkeyBinding, follows: Bool, saved: HotkeyBinding) -> HotkeyBinding {
+        guard follows else { return saved }
+        // A Shift tap would derive Shift + M and swallow every capital M.
+        if let derived = meetingFollowing(dictation), HotkeyValidation.problem(for: derived, meeting: nil) == nil { return derived }
+        return .defaultMeeting
+    }
+    static func load(_ key: String) -> HotkeyBinding? {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(HotkeyBinding.self, from: data)
+    }
+    func save(_ key: String) {
+        if let data = try? JSONEncoder().encode(self) { UserDefaults.standard.set(data, forKey: key) }
+    }
+}
+
+enum HotkeyKeyName {
+    private static let names: [Int: String] = [
+        0:"A",1:"S",2:"D",3:"F",4:"H",5:"G",6:"Z",7:"X",8:"C",9:"V",11:"B",12:"Q",13:"W",14:"E",15:"R",
+        16:"Y",17:"T",18:"1",19:"2",20:"3",21:"4",22:"6",23:"5",24:"=",25:"9",26:"7",27:"-",28:"8",29:"0",
+        30:"]",31:"O",32:"U",33:"[",34:"I",35:"P",37:"L",38:"J",39:"'",40:"K",41:";",42:"\\",43:",",44:"/",
+        45:"N",46:"M",47:".",50:"`",36:"Return",48:"Tab",49:"Space",51:"Delete",53:"Escape",
+        55:"左 Command",54:"右 Command",56:"左 Shift",60:"右 Shift",58:"左 Option",61:"右 Option",59:"左 Control",62:"右 Control",63:"Fn",
+        71:"Clear",76:"Enter",114:"Help",115:"Home",116:"Page Up",117:"Forward Delete",119:"End",121:"Page Down",
+        123:"←",124:"→",125:"↓",126:"↑",
+        122:"F1",120:"F2",99:"F3",118:"F4",96:"F5",97:"F6",98:"F7",100:"F8",101:"F9",109:"F10",
+        103:"F11",111:"F12",105:"F13",107:"F14",113:"F15",106:"F16",64:"F17",79:"F18",80:"F19",90:"F20"
+    ]
+    static func name(for keyCode: Int) -> String { names[keyCode] ?? "键码 \(keyCode)" }
+}
+
+enum HotkeyMatcher {
+    static func matches(_ binding: HotkeyBinding, keyCode: Int, held: Set<HotkeyModifier>) -> Bool {
+        guard case .chord(let expectedKey, let expectedModifiers) = binding.trigger else { return false }
+        return expectedKey == keyCode && Set(expectedModifiers) == held
+    }
+}
+
+enum HotkeyValidation {
+    /// The meeting shortcut is matched on key presses, so it must be a chord.
+    static func meetingProblem(for binding: HotkeyBinding, dictation: HotkeyBinding) -> String? {
+        if binding.isModifierTap { return "会议快捷键需要组合键，例如 右 Option + M" }
+        return problem(for: binding, meeting: dictation)
+    }
+    static func problem(for binding: HotkeyBinding, meeting: HotkeyBinding?) -> String? {
+        if let meeting, binding == meeting { return "会议快捷键不能与语音输入快捷键相同" }
+        switch binding.trigger {
+        case .modifierTap:
+            return nil
+        case .chord(let keyCode, let modifiers):
+            if keyCode == 53 && modifiers.isEmpty { return "Esc 用于取消录音，不能单独作为快捷键" }
+            if modifiers.isEmpty {
+                return HotkeyKeyName.isFunctionKey(keyCode) ? nil : "请按住 Command/Control/Option/Fn，或选择 F1–F20"
+            }
+            let onlyShift = modifiers.allSatisfy { $0.genericFlag == .maskShift }
+            if onlyShift && HotkeyKeyName.isTypingKey(keyCode) {
+                return "Shift + 字母/数字会影响正常输入，请改用其他修饰键"
+            }
+            return nil
+        }
+    }
+    static func conflictWarning(for binding: HotkeyBinding) -> String? {
+        if binding.isModifierTap {
+            return "单独修饰键可能与输入法或系统手势冲突，建议用“测试快捷键”确认"
+        }
+        guard case .chord(let keyCode, let modifiers) = binding.trigger else { return nil }
+        let generic = modifiers.reduce(UInt64(0)) { $0 | $1.genericFlag.rawValue }
+        let option = CGEventFlags.maskAlternate.rawValue
+        let command = CGEventFlags.maskCommand.rawValue
+        let control = CGEventFlags.maskControl.rawValue
+        if keyCode == 49 && generic == command { return "Command + Space 默认用于聚焦搜索（Spotlight）" }
+        if keyCode == 49 && generic == control { return "Control + Space 默认用于切换输入法" }
+        if keyCode == 49 && generic == option { return "Option + Space 可能已被 ChatGPT 等应用占用" }
+        if keyCode == 48 && generic == command { return "Command + Tab 默认用于切换应用" }
+        if keyCode == 12 && generic == command { return "Command + Q 默认用于退出应用" }
+        if keyCode == 13 && generic == command { return "Command + W 默认用于关闭窗口" }
+        if keyCode == 4 && generic == command { return "Command + H 默认用于隐藏应用" }
+        if generic == option && HotkeyKeyName.isTypingKey(keyCode) {
+            return "Option + 字母会拦截该字符的正常输入（例如 Option + M 输入 µ）"
+        }
+        return nil
+    }
+}
+
+extension HotkeyKeyName {
+    static func isFunctionKey(_ keyCode: Int) -> Bool {
+        [122,120,99,118,96,97,98,100,101,109,103,111,105,107,113,106,64,79,80,90].contains(keyCode)
+    }
+    static func isTypingKey(_ keyCode: Int) -> Bool {
+        // Letters, digits, punctuation. Navigation, function and whitespace
+        // keys are safe to claim without breaking text input.
+        let safe: Set<Int> = [36,48,49,51,53,71,76,114,115,116,117,119,121,123,124,125,126]
+        return !safe.contains(keyCode) && !isFunctionKey(keyCode)
+    }
+}
+
+// MARK: - State machines
+
+struct ModifierTapState {
+    private var began: TimeInterval?
+    private var chord = false
+    mutating func keyDown() { if began != nil { chord = true } }
+    mutating func cancel() { if began != nil { chord = true } }
+    mutating func flags(keyCode: Int, down: Bool, otherModifiers: Bool, now: TimeInterval, target: HotkeyModifier) -> Bool {
+        guard keyCode == target.rawValue else {
+            if began != nil { chord = true }
+            return false
+        }
+        if down {
+            began = now
+            chord = otherModifiers
+            return false
+        }
+        let valid = began.map { now - $0 <= 0.45 && now >= $0 } ?? false
+        let fire = valid && !chord && !otherModifiers
+        began = nil; chord = false
+        return fire
+    }
+}
+
+// A chord fires once on key-down and consumes its matching key-up even if the
+// modifiers were released first.
+struct HotkeyChordState {
+    private var claimedKey: Int?
+    mutating func event(binding: HotkeyBinding, keyCode: Int, down: Bool, held: Set<HotkeyModifier>, repeated: Bool) -> (consume: Bool, fire: Bool) {
+        if !down {
+            let wasClaimed = claimedKey == keyCode
+            if wasClaimed { claimedKey = nil }
+            return (wasClaimed, false)
+        }
+        if claimedKey == keyCode { return (true, false) }
+        guard !repeated, HotkeyMatcher.matches(binding, keyCode: keyCode, held: held) else { return (false, false) }
+        claimedKey = keyCode
+        return (true, true)
+    }
+}
+
+struct HotkeyTestEvent {
+    let description: String
+    let matched: Bool
+    let elapsed: TimeInterval?
+    /// Why a press of the configured key did not count.
+    var hint: String? = nil
 }
 
 final class GlobalHotkey {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
-    private var state = OptionTapState()
-    private var meetingChord = MeetingChordState()
+    private var dictationTap = ModifierTapState()
+    private var dictationChord = HotkeyChordState()
+    private var meetingChord = HotkeyChordState()
+    private var functionHeld = false
+    private var modifierBegan: TimeInterval?
+    private var lastUnmatchedTest: TimeInterval = 0
+
+    private(set) var binding: HotkeyBinding
+    private(set) var meetingBinding: HotkeyBinding
+    private(set) var failure: String?
     var onToggle: (() -> Void)?
     var onMeeting: (() -> Void)?
     var onEscape: (() -> Void)?
+    var onTestEvent: ((HotkeyTestEvent) -> Void)?
+    var testing = false
+    /// While a new shortcut is being recorded, keys pass through untouched so
+    /// the recorder receives them and no shortcut action fires.
+    var suspended = false { didSet { reset() } }
     var active: Bool { tap != nil }
-    func start() {
+
+    init(binding: HotkeyBinding = .defaultDictation, meetingBinding: HotkeyBinding = .defaultMeeting) {
+        self.binding = binding
+        self.meetingBinding = meetingBinding
+    }
+
+    func update(binding: HotkeyBinding, meetingBinding: HotkeyBinding) {
+        self.binding = binding
+        self.meetingBinding = meetingBinding
+        reset()
+    }
+
+    @discardableResult
+    func start() -> Bool {
         stop()
-        // Check, do not prompt implicitly at launch.
-        guard CGPreflightListenEventAccess() else { return }
-        let mask = (CGEventMask(1) << CGEventType.flagsChanged.rawValue) | (CGEventMask(1) << CGEventType.keyDown.rawValue) | (CGEventMask(1) << CGEventType.keyUp.rawValue)
+        // Creating an active tap sends TCC a real (non-preflight) request for
+        // event access, which may prompt. Without either permission it cannot
+        // succeed, so do not prompt implicitly at launch or on retries.
+        guard AXIsProcessTrusted() || CGPreflightListenEventAccess() else {
+            failure = Self.diagnosis()
+            return false
+        }
+        let mask = (CGEventMask(1) << CGEventType.flagsChanged.rawValue)
+            | (CGEventMask(1) << CGEventType.keyDown.rawValue)
+            | (CGEventMask(1) << CGEventType.keyUp.rawValue)
         tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
             eventsOfInterest: mask, callback: { _, type, event, pointer in
                 guard let pointer = pointer else { return Unmanaged.passUnretained(event) }
                 let owner = Unmanaged<GlobalHotkey>.fromOpaque(pointer).takeUnretainedValue()
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                     if let tap = owner.tap { CGEvent.tapEnable(tap: tap, enable: true) }
-                    owner.state = OptionTapState()
-                    owner.meetingChord = MeetingChordState()
+                    owner.reset()
                     return Unmanaged.passUnretained(event)
                 }
-                let code = Int(event.getIntegerValueField(.keyboardEventKeycode))
-                let others = !event.flags.intersection([.maskCommand,.maskControl,.maskShift]).isEmpty || event.flags.rawValue & 0x20 != 0
-                let rightDown = event.flags.rawValue & 0x40 != 0
-                if type == .keyDown || type == .keyUp {
-                    if type == .keyDown { owner.state.keyDown() }
-                    let chord = owner.meetingChord.event(code:code,down:type == .keyDown,rightOption:rightDown,otherModifiers:others,repeated:event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
-                    if chord.fire { DispatchQueue.main.async { owner.onMeeting?() } }
-                    if chord.consume { return nil }
-                }
-                if type == .keyDown {
-                    if code == 53 { DispatchQueue.main.async { owner.onEscape?() } }
-                } else if type == .flagsChanged {
-                    if owner.state.flags(code: code, rightDown: rightDown, otherModifiers: others, now: ProcessInfo.processInfo.systemUptime) {
-                        DispatchQueue.main.async { owner.onToggle?() }
-                    }
-                }
-                return Unmanaged.passUnretained(event)
+                return owner.handle(type: type, event: event) ? nil : Unmanaged.passUnretained(event)
             }, userInfo: Unmanaged.passUnretained(self).toOpaque())
-        if let tap = tap {
-            source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-            CGEvent.tapEnable(tap: tap, enable: true)
+        guard let tap = tap else {
+            failure = Self.diagnosis()
+            return false
         }
+        source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        failure = nil
+        return true
     }
+
     func stop() {
         if let source = source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         if let tap = tap { CFMachPortInvalidate(tap) }
-        source = nil; tap = nil; state = OptionTapState(); meetingChord = MeetingChordState()
+        source = nil; tap = nil; failure = nil
+        reset()
     }
+
+    private func reset() {
+        dictationTap = ModifierTapState()
+        dictationChord = HotkeyChordState()
+        meetingChord = HotkeyChordState()
+        functionHeld = false
+        modifierBegan = nil
+    }
+
+    private static func diagnosis() -> String {
+        // An active (filtering) tap is granted through Accessibility; Input
+        // Monitoring only explains a refused tap when Accessibility is present.
+        if !AXIsProcessTrusted() { return "活动事件监听需要辅助功能权限" }
+        if !CGPreflightListenEventAccess() { return "输入监控授权记录可能已失效；若系统设置中开关已打开，请移除后重新添加 freetalk" }
+        return "系统未允许创建事件监听"
+    }
+
+    /// Handles one event from the tap, which runs on the main run loop.
+    /// Returns true when the event is part of a shortcut and must not reach
+    /// the focused app.
+    func handle(type: CGEventType, event: CGEvent, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        guard !suspended else { return false }
+        let code = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        let flags = event.flags
+        if type == .flagsChanged && code == HotkeyModifier.function.rawValue { functionHeld = flags.contains(.maskSecondaryFn) }
+        else if !flags.contains(.maskSecondaryFn) { functionHeld = false }
+        let held = HotkeyModifier.held(in: flags, function: functionHeld)
+        if type == .flagsChanged {
+            guard let modifier = HotkeyModifier(rawValue: code) else { return false }
+            let down = held.contains(modifier)
+            guard let target = binding.modifierTap, modifier == target else {
+                dictationTap.cancel()
+                if testing && down { report(HotkeyTestEvent(description: modifier.display, matched: false, elapsed: nil)) }
+                return false
+            }
+            let fire = dictationTap.flags(keyCode: code, down: down, otherModifiers: !held.subtracting([target]).isEmpty, now: now, target: target)
+            if down { modifierBegan = now }
+            if testing {
+                if fire {
+                    report(HotkeyTestEvent(description: target.display, matched: true, elapsed: modifierBegan.map { now - $0 }))
+                } else {
+                    report(HotkeyTestEvent(description: target.display, matched: false, elapsed: nil,
+                                           hint: down ? nil : "按住超过 0.45 秒，或同时按了其他键"))
+                }
+            } else if fire {
+                DispatchQueue.main.async { self.onToggle?() }
+            }
+            if !down { modifierBegan = nil }
+            return false
+        }
+        guard type == .keyDown || type == .keyUp else { return false }
+        let down = type == .keyDown
+        let repeated = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        if down { dictationTap.keyDown() }
+
+        let meeting = meetingChord.event(binding: meetingBinding, keyCode: code, down: down, held: held, repeated: repeated)
+        if meeting.fire {
+            if testing {
+                report(HotkeyTestEvent(description: "会议键 \(meetingBinding.display)", matched: false, elapsed: nil))
+            } else {
+                DispatchQueue.main.async { self.onMeeting?() }
+            }
+        }
+        if meeting.consume { return true }
+
+        if !binding.isModifierTap {
+            let dictation = dictationChord.event(binding: binding, keyCode: code, down: down, held: held, repeated: repeated)
+            if dictation.fire {
+                if testing {
+                    report(HotkeyTestEvent(description: binding.display, matched: true, elapsed: nil))
+                } else {
+                    DispatchQueue.main.async { self.onToggle?() }
+                }
+            }
+            if dictation.consume { return true }
+        }
+
+        if down && code == 53 {
+            if testing {
+                report(HotkeyTestEvent(description: "Escape", matched: false, elapsed: nil))
+            } else {
+                DispatchQueue.main.async { self.onEscape?() }
+            }
+            return false
+        }
+
+        if testing && down && now - lastUnmatchedTest > 0.5 {
+            lastUnmatchedTest = now
+            // Name the physical sides so a left/right mix-up is visible.
+            let pressed = HotkeyBinding(trigger: .chord(keyCode: code, modifiers: HotkeyModifier.ordered(held)))
+            report(HotkeyTestEvent(description: pressed.display, matched: false, elapsed: nil))
+        }
+        return false
+    }
+
+    private func report(_ event: HotkeyTestEvent) {
+        DispatchQueue.main.async { self.onTestEvent?(event) }
+    }
+
     deinit { stop() }
+}
+
+private extension HotkeyBinding {
+    var modifierTap: HotkeyModifier? {
+        if case .modifierTap(let modifier) = trigger { return modifier }
+        return nil
+    }
 }
 
 func axAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {

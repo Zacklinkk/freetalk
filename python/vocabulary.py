@@ -39,6 +39,10 @@ def personal_aliases(values, terms):
         if not isinstance(old,str) or not isinstance(new,str): continue
         if not 2 <= len(old) <= 64 or not 2 <= len(new) <= 64 or old == new or new not in terms: continue
         if any(c in old+new for c in '\r\n\t') or re.findall(r'\d+',old) != re.findall(r'\d+',new): continue
+        # Punctuation and spaces belong to the transcript, not the term. A pair
+        # like "插画。" -> "cha hua" would otherwise enter the ASR hotword list
+        # as a literal string and never match anything.
+        if any(c in old+new for c in '，。！？、；：""''「」『』（）()【】[]{}…—·,.!?;:\'"') or re.search(r'\s', old+new): continue
         if old not in seen: result.append({'heard':old,'term':new}); seen.add(old)
     return result
 
