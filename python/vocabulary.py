@@ -158,4 +158,15 @@ def spelling_hints(raw, context):
             if grounded_spelling(raw,old,new,context):
                 pairs.append([old,new]);seen.add(key)
                 if len(pairs)>=8:return pairs
+    # A learned pair is context, not a rule: surface it so the model can weigh
+    # it against this utterance. Without this the editor never learns that a
+    # correction exists, and its own grounded spelling edit is then refused.
+    for row in context.get('personal_aliases',[]):
+        heard_word, term = row.get('heard',''), row.get('term','')
+        if not heard_word or not term or heard_word not in raw: continue
+        if LITERALS.search(heard_word): continue
+        key=tuple(sorted((heard_word,term)))
+        if key in seen: continue
+        pairs.append([heard_word,term]); seen.add(key)
+        if len(pairs)>=8: break
     return pairs

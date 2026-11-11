@@ -38,6 +38,18 @@ class LayoutAliasTests(unittest.TestCase):
             text,meta=editor.edit(raw,ctx,policy='fast')
             self.assertEqual(text,raw)
             self.assertEqual(meta['confirmed_corrections'],0)
+    def test_learned_alias_applies_when_utterance_is_unambiguous(self):
+        # The correction the user taught should take effect. Refusing every
+        # learned pair dropped the fix the user asked for.
+        ctx=normalize_context({'personal_terms':['星河知识库'],'personal_aliases':[{'heard':'星禾知识库','term':'星河知识库'}]})
+        plan={'edits':[{'old':'星禾知识库','new':'星河知识库','kind':'spelling'}],'breaks':[],'bullets':[]}
+        text,meta=apply_plan('打开星禾知识库查一下。',plan,ctx)
+        self.assertEqual(text,'打开星河知识库查一下。')
+        self.assertEqual(meta.get('rejected_edits',[]),[])
+        # The learned pair reaches the model as context rather than being absent.
+        from vocabulary import spelling_hints
+        self.assertIn(['星禾知识库','星河知识库'],spelling_hints('打开星禾知识库查一下。',ctx))
+
     def test_model_cannot_force_a_previous_correction(self):
         ctx=normalize_context({'personal_terms':['浮窗'],'personal_aliases':[{'heard':'服装','term':'浮窗'}]})
         raw='这件服装挺合适，浮窗的样式之后再讨论。'
