@@ -121,6 +121,25 @@ class MeetingTests(unittest.TestCase):
         self.assertEqual(rejected,1)
         self.assertEqual(facts[0]['text'],'只有验收通过才发布。')
 
+    def test_segment_level_reference_resolves_to_its_first_sentence(self):
+        # Models sometimes cite "s000001" instead of "s000001_u1". One malformed
+        # id must not drop the fact, and it must not pull in a later sentence.
+        rows = validate_segments([dict(start=0,end=4,text='负责人还是小王。预算上限三万。')])
+        units, refs = source_units(rows)
+        self.assertEqual([u['id'] for u in units], ['s000001_u1', 's000001_u2'])
+        candidate = expand_references({'facts':[dict(kind='action',refs=['s000001'],owner='小王')]}, refs)
+        facts, rejected = validate_facts(candidate, rows)
+        self.assertEqual(rejected, 0)
+        self.assertEqual(facts[0]['owner'], '小王')
+        self.assertEqual(facts[0]['text'], '负责人还是小王。')
+
+    def test_unknown_reference_still_rejected(self):
+        rows = validate_segments([dict(start=0,end=4,text='负责人还是小王。')])
+        _, refs = source_units(rows)
+        candidate = expand_references({'facts':[dict(kind='action',refs=['s999999'])]}, refs)
+        _, rejected = validate_facts(candidate, rows)
+        self.assertEqual(rejected, 1)
+
     def test_json_wrapper_recovery_never_repairs_content(self):
         self.assertEqual(parse_json('{"facts":[]}"'), {'facts': []})
         self.assertEqual(parse_json('```json\n{"facts":[]}\n```'), {'facts': []})
