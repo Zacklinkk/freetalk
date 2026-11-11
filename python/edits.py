@@ -151,17 +151,26 @@ def grounded_spelling(raw, old, new, context):
     short,long=sorted((x,y),key=len)
     return len(long)==len(short)+1 and any(long[:i]+long[i+1:]==short for i in range(len(long)))
 
-def rewrites_learned_alias(old,new,context):
-    """Text-only history is not acoustic evidence for this utterance.
+def rewrites_learned_alias(raw,old,new,start,end,context):
+    """Refuse only when the utterance keeps both spellings in play.
 
-    ASR may output either spelling from the audio. The editor cannot turn a
-    previous correction into a rule, even when it labels the change differently.
-    Explicit, source-evidenced spoken repairs use the separate repairs path.
+    A learned pair is context, not a rule. The old code refused every edit that
+    touched a learned pair, which silently dropped the very correction the user
+    had taught: the model proposes 星禾知识库→星河知识库, the pair is in the
+    vocabulary, and the edit was rejected even though the rest of the sentence
+    never used the heard spelling again.
+
+    Refuse only when the same utterance also uses the target word outside the
+    span being replaced. Then the two spellings are genuinely ambiguous and a
+    blanket swap could rewrite a legitimate use.
     """
     a,b=core(old),core(new)
+    outside = core(raw[:start] + raw[end:])
     for row in context.get('personal_aliases',[]):
         heard,term=core(row['heard']),core(row['term'])
-        if heard and term and a.count(heard)>b.count(heard) and b.count(term)>a.count(term):return True
+        if not (heard and term): continue
+        if not (a.count(heard)>b.count(heard) and b.count(term)>a.count(term)): continue
+        if term and term in outside: return True
     return False
 
 def replace_spans(raw, patches):
@@ -502,7 +511,7 @@ def apply_plan(raw, plan, context):
             new=''
         if core(old)==core(new) and any(p in old and p not in new for p in '。！？!?') and repair_false_stops(old)[0] != new:reason='sentence_boundary_change'
         if not reason and protected_span(raw,start,end):reason='literal_span'
-        if not reason and rewrites_learned_alias(old,new,context):reason='learned_alias_requires_audio'
+        if not reason and rewrites_learned_alias(raw,old,new,start,end,context):reason='learned_alias_requires_audio'
         discourse=contextual_cleanup(raw,old,new,start,edit.get('kind'))
         repetition=repetition_cleanup(raw,old,new,start)
         spelling=edit.get('kind')=='spelling' and grounded_spelling(raw,old,new,context)
