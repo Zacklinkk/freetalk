@@ -115,9 +115,9 @@ final class RecordingHUD: NSObject {
         action.title=""; action.image=NSImage(systemSymbolName:"stop.circle.fill",accessibilityDescription:"停止录音")?.withSymbolConfiguration(.init(pointSize:20,weight:.regular)); action.setAccessibilityLabel("停止录音"); action.isEnabled=false
         panel.orderFrontRegardless()
     }
-    func showMeeting() {
+    func showMeeting(shortcut: String) {
         show(target:nil)
-        originalDestination = "保存到会议资料 · 右 Option + M 结束"
+        originalDestination = "保存到会议资料 · \(shortcut) 结束"
         destination.stringValue = originalDestination; title.stringValue = "准备会议录音"
         action.isEnabled = true
     }

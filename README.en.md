@@ -16,8 +16,8 @@ freetalk is an open-source voice tool for Apple Silicon Macs. Dictate into your 
 
 | Your goal | What freetalk provides |
 | --- | --- |
-| Put an idea into an app | Tap **right Option**, speak, then tap again. Remove clear stutters, fillers and spoken corrections while preserving details. A compact indicator shows the target app, level and status. Messages are never sent automatically. |
-| Keep useful meeting records | Press **right Option + M** to start or stop a meeting, or import audio. Generate timestamped transcripts, cited basic minutes, action items and a mind map locally. Speaker labeling is optional. |
+| Put an idea into an app | Tap the default **right Option** (or your custom shortcut), speak, then tap again. Remove clear stutters, fillers and spoken corrections while preserving details. A compact indicator shows the target app, level and status. Messages are never sent automatically. |
+| Keep useful meeting records | Press the default **right Option + M** (customizable) to start or stop a meeting, or import audio. Generate timestamped transcripts, cited basic minutes, action items and a mind map locally. Speaker labeling is optional. |
 | Give context to people and agents | Search, page through and export JSON, Markdown and mind maps with the bundled CLI. Trace conclusions to source segments. Optionally add deeper writing through OneAPI or another OpenAI-compatible service. |
 
 ## Get started
@@ -27,7 +27,7 @@ Requires **Apple Silicon and macOS 14+**. Recommended: 16 GB unified memory and 
 1. Download the macOS arm64 ZIP from [Releases](https://github.com/Zacklinkk/freetalk/releases/latest). Move `freetalk.app` to Applications or `~/Applications`.
 2. Follow onboarding to allow microphone, Accessibility and Input Monitoring. Accessibility supports insertion into the selected field; Input Monitoring supports global shortcuts. [Permission guide](docs/permissions.md)
 3. Download the local models. Choose Hugging Face or HF-Mirror, monitor progress, speed and ETA, and pause/retry with resumable downloads and file verification. [Model setup](docs/model-setup.md)
-4. Try a sentence and compare the raw transcript, cleaned result and latency. Then focus an input field in your app and tap right Option.
+4. Try a sentence and compare the raw transcript, cleaned result and latency. Then focus an input field in your app and tap your shortcut (default right Option).
 
 Public builds are not Apple-notarized. If macOS blocks the first launch, verify that the download came from this repository and follow the system's Privacy & Security instructions. Do not disable system security. Reopen the permission guide if an update invalidates access.
 
@@ -37,6 +37,7 @@ Public builds are not Apple-notarized. If macOS blocks the first launch, verify 
 - **Format numbers in context.** Quantities, versions and identifiers can use digits; ordinary Chinese words, names, ambiguous estimates, quotations and code remain protected. Context can ground the spelling of known model versions.
 - **Use your vocabulary.** Personal terms are spelling candidates, not unconditional replacements. The input draft, app name and window title help disambiguation. Nearby visible text is a separate opt-in, read once with strict limits and processed locally. There is no screenshot collection or continuous background capture.
 - **Learn with undo.** Reliable local corrections can suggest vocabulary entries, with an undo notice. Learning does not permanently ban a word or automatically fine-tune model weights.
+- **Choose your shortcuts.** The default is a right-Option tap; meetings use right Option + M. Record a single modifier or a chord in Settings. Meeting shortcuts can follow the dictation key or be recorded separately. **Test shortcut** listens for 8 seconds and distinguishes missing permission, a consumed event and a mismatched binding without recording.
 - **Control the device and duration.** Follow the system microphone or select one. Dictation limits range from 30 to 600 seconds; new users start at 3 minutes. The last 10 seconds show a countdown and a smooth mint-to-red transition, respecting Reduce Motion.
 - **Find previous results.** Browse and copy the latest 500 text entries. Older entries roll off. Ordinary dictation audio is not retained.
 
@@ -44,7 +45,7 @@ Before inserting, freetalk checks the app, input field, draft and cursor. Switch
 
 ## Meetings: local basics, optional cloud writing
 
-Enable Meetings before use. **Right Option + M** starts or stops microphone recording. Import WAV, M4A, MP3 or FLAC. Meeting recording has an 8-hour limit and currently does not capture system playback audio.
+Enable Meetings before use. The default **right Option + M** (customizable in Settings) starts or stops microphone recording. Import WAV, M4A, MP3 or FLAC. Meeting recording has an 8-hour limit and currently does not capture system playback audio.
 
 Local ASR and the local editor always produce the transcript, basic minutes and mind map first. An optional ~107 MB diarization model labels anonymous speakers within the meeting and overlapping segments. It does not identify real people or reliably recover every simultaneously spoken word.
 

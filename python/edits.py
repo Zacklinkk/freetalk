@@ -28,6 +28,21 @@ def stutter_span(text):
 
 PROTECTED = ('可能','我觉得','如果','除非','只有','不要','不能','未必','比如','例如','还没','已经','好吧','吗','呢')
 
+# Real Chinese reduplicated words. A doubled character outside this closed class
+# is a speech stutter (有有/他他/飞书书), not a word (看看/仅仅/猩猩).
+REDUPLICATED = frozenset('''
+看看 试试 想想 说说 聊聊 问问 找找 查查 改改 修修 写写 读读 听听 算算 数数 认认 记记 学学 练练
+用用 走走 跑跑 点点 画画 唱唱 笑笑 玩玩 歇歇 尝尝 摸摸 比比 画画 数数 亲亲 抱抱 拍拍 打打
+谢谢 妈妈 爸爸 哥哥 姐姐 弟弟 妹妹 爷爷 奶奶 叔叔 婶婶 舅舅 姑姑 舅舅 太太 宝宝 娃娃 猩猩
+星星 刚刚 常常 渐渐 慢慢 仅仅 偏偏 明明 白白 通通 统统 天天 年年 人人 家家 处处 时时 事事
+件件 种种 层层 个个 条条 张张 本本 次次 回回 趟趟 声声 句句 字字 行行 段段 页页 单单 纷纷
+茫茫 匆匆 悄悄 默默 微微 轻轻 深深 高高 远远 久久 团团 栩栩 津津 念念 依依 恋恋 娓娓 喋喋
+熊熊 朗朗 呱呱 哈哈 呵呵 嘿嘿 嘻嘻 咚咚 当当 哗哗 沙沙 呼呼 嘀嘀 嘟嘟 嗡嗡 嘤嘤 嗷嗷 嘶嘶
+啦啦 零零 丁丁 冬冬 一一 人人 天天 岁岁 户户 碗碗 杯杯 盘盘 斤斤 两两 双双 对对 双双 点点
+往往 每每 渐渐 恰恰 刚刚 正正 偏偏 单单 白白 徒徒 空空 茫茫 纷纷 匆匆 悄悄 默默 冉冉 徐徐
+依依 恋恋 津津 有味 头头 面面 事事 时时 处处 人人 家家 户户 世世 代代 子子 孙孙 层层 级级
+'''.split())
+
 def allowed(old, new, context):
     a, b = core(old), core(new)
     if a == b: return True
@@ -227,6 +242,14 @@ def preclean(raw, context=None):
         add(m.start(),m.end(),word)
     for m in re.finditer(r'(?P<word>系统|功能|模型|我们|他们)(?P<prefix>系|功|模|我|他)(?P=word)',raw):
         if m['word'].startswith(m['prefix']): add(m.start(),m.end(),m['word'])
+    # A doubled single character is a stutter unless it spells a real reduplicated
+    # word. Reduplication is a closed class, so an explicit list is safer than
+    # guessing from context: 有有/他他/飞书书 are stutters, 看看/仅仅 are words.
+    # 都/也/就 are handled above with word-boundary checks (成都都/成就就 are
+    # legitimate). Runs last so 系统系系统 collapses to 系统, not 系统系统.
+    for m in re.finditer(r'([一-鿿])\1',raw):
+        if m.group(0) in REDUPLICATED or m.group(1) in '都也就': continue
+        add(m.start(),m.end(),m.group(1))
     for m in re.finditer(r'能(?=能不能)|可(?=可不可以)|需(?=需要)|操(?=操控)|系(?=系统)|分(?=分区)|语(?=语义)|模(?=模型)|功(?=功能)|提(?=提示词)',raw):
         add(m.start(),m.end(),'')
     # Exact adjacent restarts only. Near matches go to triage and retain new detail.

@@ -62,6 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var micPicker: NSPopUpButton!
     var contextButton: NSButton!
     var shortcutButton: NSButton!
+    var dictationShortcutButton: NSButton!
+    var meetingShortcutButton: NSButton!
+    var meetingFollowButton: NSButton!
+    var shortcutTestLabel: NSTextField!
+    let hotkeyRecorder = HotkeyRecorder()
+    let hotkeyTester = HotkeyTestController()
+    var lastHotkeyAttempt = Date.distantPast
     var deviceList: [MicDevice] = []
     var target: InputSnapshot?
     var session = UUID()
@@ -103,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             lastText = item["text"] as? String ?? ""; lastRaw = item["raw"] as? String ?? ""
         }
         _ = historyStore
+        loadHotkeyBindings()
         createMenu(); createWindow(); refreshDevices()
         meetings.connect()
         appUpdater.canInstall = { [weak self] in
@@ -158,7 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self = self else { return }
             self.modelText = text
             if ready && self.phase == .idle {
-                self.setStatus(AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? "就绪 · 从菜单栏或右 Option 开始" : "模型就绪 · 请先允许麦克风访问")
+                self.setStatus(AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? "就绪 · 从菜单栏或 \(self.hotkey.binding.display) 开始" : "模型就绪 · 请先允许麦克风访问")
             }
             if !ready {
                 if self.phase != .idle { self.cancelRecording(reload: false) }
@@ -177,19 +185,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self = self else { return }
             if self.meetings.recording || self.meetings.preparing { self.meetings.stopRecording(process:true) }
             else if self.meetings.enabled { self.meetings.startRecording(title:"") }
-            else { self.showMeetings(); self.meetings.showMessage("请先启用会议资料。之后右 Option + M 可开始或结束会议录音。") }
+            else { self.showMeetings(); self.meetings.showMessage("请先启用会议资料。之后 \(self.hotkey.meetingBinding.display) 可开始或结束会议录音。") }
         }
         hotkey.onEscape = { [weak self] in self?.cancelRecording() }
         updateHotkey()
         ticks = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            if self.phase == .idle && UserDefaults.standard.object(forKey: "shortcutEnabled") as? Bool != false && !self.hotkey.active { self.updateHotkey() }
+            if self.phase == .idle && UserDefaults.standard.object(forKey: "shortcutEnabled") as? Bool != false
+                && !self.hotkey.active && Date().timeIntervalSince(self.lastHotkeyAttempt) > 5 { self.updateHotkey() }
             self.refreshPermissions()
             self.prepareSelectedDevice()
         }
         reloadModel()
         let first = !UserDefaults.standard.bool(forKey: "onboardingCompletedV1")
-        let permissions = VoicePermissions.current(shortcutActive:hotkey.active)
+        let permissions = VoicePermissions.current(shortcutActive:hotkey.active, shortcutFailure:hotkey.failure)
         if first || CommandLine.arguments.contains("--onboarding") { onboarding.show() }
         else if !permissions.microphoneAllowed || (permissions.needsGuidance && !UserDefaults.standard.bool(forKey:"onboardingLimitedModeV1")) { onboarding.showPermissions() }
         else if CommandLine.arguments.contains("--show") { showWindow() }
@@ -267,9 +276,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                    level: level, stage: processingStage, targetIssue: targetIssue, anchor: hudAnchor)
     }
     func refreshPermissions() {
-        let permissions = VoicePermissions.current(shortcutActive:hotkey.active)
-        permissionsLabel?.stringValue = "麦克风：\(permissions.microphoneAllowed ? "已允许" : "待授权")  ·  辅助功能：\(permissions.accessibility ? "已允许" : "待授权")  ·  右 Option：\(permissions.shortcutReady ? "可用" : permissions.shortcutEnabled ? "待连接 / 授权" : "未启用")"
+        let permissions = VoicePermissions.current(shortcutActive:hotkey.active, shortcutFailure:hotkey.failure)
+        permissionsLabel?.stringValue = "麦克风：\(permissions.microphoneAllowed ? "已允许" : "待授权")  ·  辅助功能：\(permissions.accessibility ? "已允许" : "待授权")  ·  快捷键：\(permissions.shortcutReady ? "可用" : permissions.shortcutEnabled ? "待连接 / 授权" : "未启用")"
         onboarding.refresh()
+        refreshHotkeyLabels()
+    }
+    var meetingFollowsDictation: Bool { UserDefaults.standard.object(forKey:"meetingFollowsMainV1") as? Bool ?? true }
+    func refreshHotkeyLabels() {
+        guard dictationShortcutButton != nil else { return }
+        meetingFollowButton.state = meetingFollowsDictation ? .on : .off
+        meetingShortcutButton.isEnabled = !meetingFollowsDictation && !hotkeyRecorder.isRecording
+        // Keep the "press a key" prompt on whichever button is recording.
+        guard !hotkeyRecorder.isRecording else { return }
+        dictationShortcutButton.title = hotkey.binding.display
+        meetingShortcutButton.title = hotkey.meetingBinding.display
+    }
+    func loadHotkeyBindings() {
+        var dictation = HotkeyBinding.load("hotkeyBindingV1") ?? .defaultDictation
+        var meeting = HotkeyBinding.meeting(for: dictation, follows: meetingFollowsDictation,
+                                            saved: HotkeyBinding.load("meetingBindingV1") ?? .defaultMeeting)
+        if HotkeyValidation.problem(for: dictation, meeting: meeting) != nil { dictation = .defaultDictation }
+        if HotkeyValidation.meetingProblem(for: meeting, dictation: dictation) != nil { meeting = .defaultMeeting }
+        hotkey.update(binding: dictation, meetingBinding: meeting)
+    }
+    func applyDictationBinding(_ binding: HotkeyBinding) {
+        binding.save("hotkeyBindingV1")
+        let meeting = HotkeyBinding.meeting(for: binding, follows: meetingFollowsDictation, saved: hotkey.meetingBinding)
+        meeting.save("meetingBindingV1")
+        hotkey.update(binding: binding, meetingBinding: meeting)
+        shortcutTestLabel?.stringValue = savedMessage("已保存：\(binding.display)", binding)
+        updateHotkey(); refreshHotkeyLabels()
+    }
+    func applyMeetingBinding(_ binding: HotkeyBinding) {
+        UserDefaults.standard.set(false, forKey:"meetingFollowsMainV1")
+        binding.save("meetingBindingV1")
+        hotkey.update(binding: hotkey.binding, meetingBinding: binding)
+        shortcutTestLabel?.stringValue = savedMessage("已保存：会议键 \(binding.display)", binding)
+        updateHotkey(); refreshHotkeyLabels()
+    }
+    private func savedMessage(_ saved: String, _ binding: HotkeyBinding) -> String {
+        HotkeyValidation.conflictWarning(for: binding).map { "\(saved)。\($0)" } ?? saved
+    }
+    func cancelShortcutRecording() { hotkeyRecorder.cancel(); hotkey.suspended = false }
+    func applicationDidResignActive(_ notification: Notification) {
+        // The recorder only sees this app's key events. Never leave the global
+        // shortcut suspended after the user switches away.
+        guard hotkeyRecorder.isRecording else { return }
+        cancelShortcutRecording()
+        shortcutTestLabel?.stringValue = "已取消录制"
+        refreshHotkeyLabels()
     }
     func applicationDidBecomeActive(_ notification: Notification) {
         guard window != nil else { return }
@@ -277,8 +332,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         else { refreshPermissions() }
     }
     func updateHotkey() {
-        if UserDefaults.standard.object(forKey: "shortcutEnabled") as? Bool != false { hotkey.start() } else { hotkey.stop() }
+        lastHotkeyAttempt = Date()
+        if UserDefaults.standard.object(forKey: "shortcutEnabled") as? Bool != false { _ = hotkey.start() } else { hotkey.stop() }
         refreshPermissions()
+        meetingView?.refreshState()  // shows the current meeting shortcut
     }
     @objc func preferencesChanged() {
         UserDefaults.standard.set(cleanupPicker.indexOfSelectedItem, forKey: "cleanupMode")
@@ -287,6 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.set(learningButton.state == .on, forKey: "learnCorrections")
         if learningButton.state == .off { correctionLearner.stop() }
         UserDefaults.standard.set(shortcutButton.state == .on, forKey: "shortcutEnabled"); updateHotkey()
+        if shortcutButton.state == .off { hotkeyTester.stop() }
     }
     @objc func refreshDevices() {
         guard phase == .idle else { return }
@@ -355,6 +413,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !CGPreflightListenEventAccess() { NSWorkspace.shared.open(VoicePermission.inputMonitoring.settingsURL) }
     }
     @objc func recheckPermissions() { updateHotkey(); prepareSelectedDevice(); refreshPermissions() }
+    @objc func recordDictationShortcut() {
+        hotkeyTester.stop(); cancelShortcutRecording()
+        refreshHotkeyLabels()
+        shortcutTestLabel?.stringValue = "录制中…"
+        dictationShortcutButton.title = "请按下快捷键…"
+        meetingShortcutButton.isEnabled = false
+        hotkey.suspended = true
+        hotkeyRecorder.begin(validate: { [weak self] binding in
+            guard let self = self else { return nil }
+            // Compare with the meeting key this choice would produce.
+            let meeting = HotkeyBinding.meeting(for: binding, follows: self.meetingFollowsDictation, saved: self.hotkey.meetingBinding)
+            return HotkeyValidation.problem(for: binding, meeting: meeting)
+        }, onStatus: { [weak self] text in
+            self?.shortcutTestLabel?.stringValue = text
+        }, onFinish: { [weak self] result in
+            guard let self = self else { return }
+            self.hotkey.suspended = false
+            self.dictationShortcutButton.title = self.hotkey.binding.display
+            switch result {
+            case .recorded(let binding): self.applyDictationBinding(binding)
+            case .cancelled: self.shortcutTestLabel?.stringValue = "已取消录制"; self.refreshHotkeyLabels()
+            }
+        })
+    }
+    @objc func recordMeetingShortcut() {
+        hotkeyTester.stop(); cancelShortcutRecording()
+        hotkey.meetingBinding.save("meetingBindingV1")
+        UserDefaults.standard.set(false, forKey:"meetingFollowsMainV1")
+        refreshHotkeyLabels()
+        shortcutTestLabel?.stringValue = "录制中…"
+        meetingShortcutButton.title = "请按下快捷键…"
+        hotkey.suspended = true
+        hotkeyRecorder.begin(validate: { [weak self] binding in
+            guard let self = self else { return nil }
+            return HotkeyValidation.meetingProblem(for: binding, dictation: self.hotkey.binding)
+        }, onStatus: { [weak self] text in
+            self?.shortcutTestLabel?.stringValue = text
+        }, onFinish: { [weak self] result in
+            guard let self = self else { return }
+            self.hotkey.suspended = false
+            self.meetingShortcutButton.title = self.hotkey.meetingBinding.display
+            switch result {
+            case .recorded(let binding): self.applyMeetingBinding(binding)
+            case .cancelled:
+                self.shortcutTestLabel?.stringValue = "已取消录制"
+                self.refreshHotkeyLabels()
+            }
+        })
+    }
+    @objc func meetingFollowChanged() {
+        let follows = meetingFollowButton.state == .on
+        if follows {
+            let meeting = HotkeyBinding.meeting(for: hotkey.binding, follows: true, saved: hotkey.meetingBinding)
+            if let problem = HotkeyValidation.problem(for: hotkey.binding, meeting: meeting) {
+                meetingFollowButton.state = .off
+                shortcutTestLabel?.stringValue = "无法跟随：\(problem)"
+                return
+            }
+            UserDefaults.standard.set(true, forKey:"meetingFollowsMainV1")
+            meeting.save("meetingBindingV1")
+            hotkey.update(binding: hotkey.binding, meetingBinding: meeting)
+            shortcutTestLabel?.stringValue = "会议键跟随语音键：\(meeting.display)"
+        } else {
+            UserDefaults.standard.set(false, forKey:"meetingFollowsMainV1")
+            hotkey.meetingBinding.save("meetingBindingV1")
+            shortcutTestLabel?.stringValue = "可以单独录制会议键"
+        }
+        refreshHotkeyLabels(); updateHotkey()
+    }
+    @objc func testShortcut() {
+        cancelShortcutRecording()
+        refreshHotkeyLabels()
+        hotkeyTester.start(binding: hotkey.binding, hotkey: hotkey) { [weak self] text in
+            self?.shortcutTestLabel?.stringValue = text
+        }
+    }
+    @objc func resetHotkeys() {
+        hotkeyTester.stop(); cancelShortcutRecording()
+        UserDefaults.standard.set(true, forKey:"meetingFollowsMainV1")
+        HotkeyBinding.defaultDictation.save("hotkeyBindingV1")
+        HotkeyBinding.defaultMeeting.save("meetingBindingV1")
+        hotkey.update(binding:.defaultDictation, meetingBinding:.defaultMeeting)
+        shortcutTestLabel?.stringValue = "已恢复默认快捷键"
+        updateHotkey(); refreshHotkeyLabels()
+    }
     @objc func revealApplication() { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
     @objc func testInsertion() {
         guard phase == .idle, !meetings.busy, !inserter.busy, !appUpdater.installing else { return }
@@ -462,7 +605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     if case .failure(let error) = response { self.phase = .idle; self.hudTimer?.invalidate(); self.hud.finish(success: false, message: error.localizedDescription); self.setStatus(error.localizedDescription); return }
                     self.phase = .recording; self.started = Date()
                     self.recordingClock.start()
-                    self.setStatus("正在录音 · \(device.name) · 上限 \(DictationLimit.title(self.recordingClock.limit)) · 右 Option 停止")
+                    self.setStatus("正在录音 · \(device.name) · 上限 \(DictationLimit.title(self.recordingClock.limit)) · \(self.hotkey.binding.display) 停止")
                     self.timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
                         guard let self = self, self.phase == .recording else { return }
                         let timing = self.recordingClock.snapshot(audioSeconds: self.seconds)

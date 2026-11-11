@@ -195,7 +195,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
             add(app.row([app.button("我已设置，重新检查",#selector(AppDelegate.recheckPermissions)),app.button("在访达中显示本应用",#selector(AppDelegate.revealApplication))]))
             add(app.label("返回此页会自动检查。若系统要求重开应用，引导会记住这一步。\nTouch ID 或密码由你在系统弹窗操作；只开麦克风也可以先试说。",size:12,color:.secondaryLabelColor))
         case 3:
-            heading("试着说一句。","轻按右 Option 开始，再按一次结束；也可以点击按钮。\n最近10次试说仅在本次运行中保留，退出即清除，不输入其他应用。")
+            heading("试着说一句。","轻按 \(app.hotkey.binding.display) 开始，再按一次结束；也可以点击按钮。\n最近10次试说仅在本次运行中保留，退出即清除，不输入其他应用。")
             add(app.card("可以照着读",views:[app.label("呃，先用十个样本，不对，改成十二个。保留所有日志。",size:17)]))
             let wave = VoiceMarkView(); wave.heightAnchor.constraint(equalToConstant:45).isActive = true; mark = wave
             let button = NSButton(title:"开始试说",target:self,action:#selector(recordTrial)); button.bezelStyle = .rounded; button.controlSize = .large; trialButton = button
@@ -207,8 +207,8 @@ final class OnboardingController: NSObject, NSWindowDelegate {
             trialRaw = textArea(title:"识别原稿",text:raw,height:48)
             trialResult = textArea(title:"整理结果",text:result,height:72)
         default:
-            let permissions = VoicePermissions.current(shortcutActive:app.hotkey.active)
-            heading(permissions.canInsert ? "下一句话，就用声音。" : "可以先在应用里试说。",permissions.canInsert ? "把光标放进可编辑的输入框，用右 Option 或菜单开始录音。\n结束后先检查草稿，再由你发送。" : "跨应用输入仍需允许辅助功能。\n可从菜单的“权限设置引导”继续授权。")
+            let permissions = VoicePermissions.current(shortcutActive:app.hotkey.active, shortcutFailure:app.hotkey.failure)
+            heading(permissions.canInsert ? "下一句话，就用声音。" : "可以先在应用里试说。",permissions.canInsert ? "把光标放进可编辑的输入框，用 \(app.hotkey.binding.display) 或菜单开始录音。\n结束后先检查草稿，再由你发送。" : "跨应用输入仍需允许辅助功能。\n可从菜单的“权限设置引导”继续授权。")
             let state = app.label("",size:14); finalStatus = state
             add(app.card("你的 freetalk",views:[state]))
             add(app.card("从一开始就好用",views:[app.label("• 常用词：添加名字、项目名称和英文缩写。\n• 自动学习：可靠的短词改字可加入词库，5秒内可撤销。\n• 转写历史：本机保留最近500条，随时复制原稿或结果。",size:14)]))
@@ -225,7 +225,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         scroll.heightAnchor.constraint(equalToConstant:height).isActive = true; add(scroll); return textView
     }
     func refresh() {
-        let permissions = VoicePermissions.current(shortcutActive:app.hotkey.active)
+        let permissions = VoicePermissions.current(shortcutActive:app.hotkey.active, shortcutFailure:app.hotkey.failure)
         let mic = permissions.microphoneAllowed, ax = permissions.accessibility, keys = permissions.shortcutReady
         for (i,label) in stepLabels.enumerated() { label.textColor = i == step ? talkAccent : .secondaryLabelColor; label.font = .systemFont(ofSize:13,weight:i == step ? .semibold : .regular) }
         let idle = app.phase == .idle
@@ -245,7 +245,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         trialPicker?.isEnabled = idle && !trials.isEmpty
         mark?.level = app.phase == .recording ? app.level : 0
         trialStatus?.stringValue = app.tutorialSession ? app.statusText : !mic ? "请先允许麦克风访问。" : !app.worker.ready ? app.modelText : resultDetail.isEmpty ? "准备好后点击开始。没有朗读也可以跳过。" : resultDetail
-        finalStatus?.stringValue = "本地模型：\(app.worker.ready ? "已就绪" : "等待准备")\n麦克风：\(mic ? "已允许" : "尚未允许")\n跨应用输入：\(ax ? "已允许" : "需在设置中允许")\n右 Option：\(keys ? "可用" : "需在设置中允许")"
+        finalStatus?.stringValue = "本地模型：\(app.worker.ready ? "已就绪" : "等待准备")\n麦克风：\(mic ? "已允许" : "尚未允许")\n跨应用输入：\(ax ? "已允许" : "需在设置中允许")\n快捷键（\(app.hotkey.binding.display)）：\(keys ? "可用" : "需在设置中允许")"
     }
     func partial(_ text:String) { trialRaw?.string = text }
     func begin() { raw = ""; result = ""; resultDetail = ""; selectedTrial = nil; reloadTrials(); trialRaw?.string = ""; trialResult?.string = "" }
@@ -280,7 +280,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         guard next.isEnabled else { return }
         if step == 4 {
             UserDefaults.standard.set(true,forKey:"onboardingCompletedV1")
-            UserDefaults.standard.set(!VoicePermissions.current(shortcutActive:app.hotkey.active).canContinue,forKey:"onboardingLimitedModeV1")
+            UserDefaults.standard.set(!VoicePermissions.current(shortcutActive:app.hotkey.active, shortcutFailure:app.hotkey.failure).canContinue,forKey:"onboardingLimitedModeV1")
             window.close(); app.showWindow(); return
         }
         step += 1; render()

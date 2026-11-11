@@ -74,14 +74,28 @@ extension AppDelegate {
         layoutPicker.selectItem(at: UserDefaults.standard.bool(forKey: "paragraphLayout") ? 1 : 0); layoutPicker.target = self; layoutPicker.action = #selector(preferencesChanged); layoutPicker.setAccessibilityLabel("文字排版")
         contextButton = NSButton(checkboxWithTitle: "用输入框、应用名称和窗口标题辅助辨词", target: self, action: #selector(preferencesChanged))
         contextButton.state = UserDefaults.standard.object(forKey: "contextEnabled") as? Bool == false ? .off : .on
-        shortcutButton = NSButton(checkboxWithTitle: "快捷键：右 Option 语音输入，右 Option + M 会议", target: self, action: #selector(preferencesChanged))
+        shortcutButton = NSButton(checkboxWithTitle: "启用全局快捷键", target: self, action: #selector(preferencesChanged))
         shortcutButton.state = UserDefaults.standard.object(forKey: "shortcutEnabled") as? Bool == false ? .off : .on
         let nearby = NSButton(checkboxWithTitle:"同时参考输入框周围的可见文字（仅本机）",target:self,action:#selector(windowContextChanged(_:)))
         nearby.state = UserDefaults.standard.bool(forKey:"windowContextEnabled") ? .on : .off
-        let cleanupCard = card("文字与操作", views: [VoiceAppearance.form([("整理",cleanupPicker),("排版",layoutPicker)]),contextButton,nearby,shortcutButton,label("保留原意和细节。处理结束后，位置提示会在5秒后消失。",size:12,color:.secondaryLabelColor)])
+        let cleanupCard = card("文字与操作", views: [VoiceAppearance.form([("整理",cleanupPicker),("排版",layoutPicker)]),contextButton,nearby,label("保留原意和细节。处理结束后，位置提示会在5秒后消失。",size:12,color:.secondaryLabelColor)])
+        dictationShortcutButton = NSButton(title: hotkey.binding.display, target: self, action: #selector(recordDictationShortcut))
+        dictationShortcutButton.bezelStyle = .rounded
+        meetingShortcutButton = NSButton(title: hotkey.meetingBinding.display, target: self, action: #selector(recordMeetingShortcut))
+        meetingShortcutButton.bezelStyle = .rounded
+        meetingFollowButton = NSButton(checkboxWithTitle: "会议键跟随语音键", target: self, action: #selector(meetingFollowChanged))
+        shortcutTestLabel = label("", size: 12, color: .secondaryLabelColor)
+        let shortcutCard = card("快捷键", "轻按单个修饰键，或按住修饰键再按其他键。", views: [
+            shortcutButton,
+            row([label("语音输入",size:12), dictationShortcutButton]),
+            row([label("会议录音",size:12), meetingShortcutButton, meetingFollowButton]),
+            row([button("测试快捷键",#selector(testShortcut)), button("恢复默认",#selector(resetHotkeys))]),
+            shortcutTestLabel,
+            label("测试只检查按键是否送达，不会录音。系统开关已打开但仍提示失效时，请到输入监控中移除后重新添加 freetalk。",size:12,color:.secondaryLabelColor)
+        ])
         permissionsLabel = label("",size:11,color:.secondaryLabelColor)
         let permissionCard = card("系统权限与输入兼容性", views: [permissionsLabel,row([button("逐项授权引导",#selector(showPermissionGuide)),button("麦克风",#selector(requestMic)),button("辅助功能",#selector(requestAX)),button("输入监控",#selector(requestKeys))]),button("5秒后测试输入",#selector(testInsertion)),label("切回目标输入框，将插入“freetalk 输入测试”，不会发送。",size:12,color:.secondaryLabelColor)])
-        addSettingsPage(settingsPage("语音输入", subtitle: "说完即写入当前光标位置，保持你的表达。", cards:[statusCard,limitCard,micCard,cleanupCard,permissionCard],scrollable:true))
+        addSettingsPage(settingsPage("语音输入", subtitle: "说完即写入当前光标位置，保持你的表达。", cards:[statusCard,limitCard,micCard,shortcutCard,cleanupCard,permissionCard],scrollable:true))
 
         resultView = NSTextView(); resultView.isEditable = false; resultView.isSelectable = true; resultView.isRichText = false
         resultView.font = .systemFont(ofSize:15); resultView.textContainerInset = NSSize(width:16,height:16)

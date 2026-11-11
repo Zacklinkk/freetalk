@@ -39,6 +39,7 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     let output = NSTabView()
     let outputPicker = NSSegmentedControl(labels:["基础纪要","原稿","脑图","Agent","深度整理"],trackingMode:.selectOne,target:nil,action:nil)
     let title = NSTextField()
+    lazy var shortcutHint = app.label("", size:12, color:.secondaryLabelColor)
     var record: NSButton!, importButton: NSButton!, resumeButton: NSButton!, cancelButton: NSButton!, downloadButton: NSButton!
     var saveCloud: NSButton!
     var saveTermsButton: NSButton!
@@ -97,7 +98,7 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         output.setContentHuggingPriority(.defaultLow,for:.vertical); columns.setContentHuggingPriority(.defaultLow,for:.vertical)
         resumeButton = action("继续处理",#selector(resume))
         let controls = app.row([action("刷新",#selector(refresh)),resumeButton,action("导出资料…",#selector(export)),action("打开文件夹",#selector(reveal))])
-        let all = stack([app.label("右 Option + M 开始或结束会议录音",size:12,color:.secondaryLabelColor),title,app.row([record,importButton,cancelButton]),status,progress,columns,controls])
+        let all = stack([shortcutHint,title,app.row([record,importButton,cancelButton]),status,progress,columns,controls])
         pin(all,in:host)
         for view in [title,status,progress,columns] { view.widthAnchor.constraint(equalTo:all.widthAnchor).isActive = true }
         return host
@@ -145,6 +146,7 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         return scroll
     }
     func refreshState() {
+        shortcutHint.stringValue = "\(app.hotkey.meetingBinding.display) 开始或结束会议录音"
         let running = controller.busy
         enable.isEnabled = !running; enable.state = controller.enabled ? .on : .off
         let ready = controller.enabled && !running && app.phase == .idle && app.worker.ready && !app.modelSetup.busy && !app.appUpdater.installing

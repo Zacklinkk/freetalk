@@ -50,6 +50,14 @@ enum CorrectionExtractor {
             }
             let latinTypo = old.allSatisfy { $0.isASCII && $0.isLetter } && new.allSatisfy { $0.isASCII && $0.isLetter } && old.count == new.count && zip(old.lowercased(),new.lowercased()).filter { $0 != $1 }.count == 1
             guard oldSound == newSound || oneSoundEdit(oldSound,newSound) || latinTypo else { return nil }
+            // Sound-alike alone cannot tell a misheard word from a deliberate
+            // rewording: 星禾→星河 (misheard) and 权利→权力 (reworded) are
+            // acoustically identical. For Chinese, require the replacement to
+            // already exist in the personal vocabulary — that is the only
+            // evidence that the speaker meant this word and the recognizer got
+            // it wrong. Latin typos (SFY→SFT) are unambiguous and stay direct.
+            let isChinese = old.unicodeScalars.contains { $0.value > 0x4E00 && $0.value < 0x9FFF }
+            if isChinese && !terms.contains(where: { $0 == new || $0.hasPrefix(new) || new.hasPrefix($0) }) { return nil }
             return (old,new)
         }
         // Prefer an already known compound word instead of learning only a suffix.

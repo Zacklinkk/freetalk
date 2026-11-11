@@ -130,7 +130,7 @@ final class MeetingController: NSObject {
             activeID = id; request = UUID(); let token = request
             writer = try MeetingWAVWriter(url:directory(id).appendingPathComponent("audio.wav"))
             preparing = true; recordingDeviceUID = device.uid; message = "正在打开 \(device.name)…"; app.refreshUI(); onChange?()
-            recordingHUD.showMeeting()
+            recordingHUD.showMeeting(shortcut: app.hotkey.meetingBinding.display)
             recorder.onChunk = { [weak self] data in
                 guard let self = self, self.request == token else { return }
                 do { try self.writer?.append(data) } catch { self.stopRecording(process:false); self.showError(error) }
