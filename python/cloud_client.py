@@ -14,6 +14,9 @@ from meeting_models import NoRedirect, validate_endpoint
 
 PROTOCOLS = ('openai', 'anthropic')
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+# (endpoint, model) pairs that answered HTTP 400 to temperature=0. A client is
+# rebuilt for every utterance, so the memory lives for the worker process.
+NO_TEMPERATURE = set()
 
 
 class CloudUnavailable(Exception):
@@ -54,23 +57,19 @@ def chat_client(protocol, base_url, model, api_key, headers=None):
         endpoint = base + ('/messages' if base.endswith('/v1') else '/v1/messages')
         auth = {'x-api-key': api_key, 'anthropic-version': '2023-06-01'}
     opener = urllib.request.build_opener(NoRedirect())
+    # Newer models (Claude Haiku/Sonnet/Opus 5.5, OpenAI reasoning models)
+    # reject a non-default temperature with HTTP 400; older ones accept 0.
+    # After one such refusal the worker stops sending it to that model.
+    key = (endpoint, model)
 
-    def complete(messages, max_tokens, timeout):
-        system = '\n\n'.join(m['content'] for m in messages if m['role'] == 'system')
-        turns = [{'role': m['role'], 'content': m['content']} for m in messages if m['role'] != 'system']
-        if protocol == 'openai':
-            body = {'model': model, 'temperature': 0, 'max_tokens': max_tokens,
-                    'messages': ([{'role': 'system', 'content': system}] if system else []) + turns}
-        else:
-            body = {'model': model, 'temperature': 0, 'max_tokens': max_tokens, 'messages': turns}
-            if system:
-                body['system'] = system
+    def send(body, timeout):
         request = urllib.request.Request(endpoint, data=json.dumps(body, ensure_ascii=False).encode(),
                                          headers={**extra, **auth, 'Content-Type': 'application/json'})
         try:
             with opener.open(request, timeout=max(1.0, float(timeout))) as response:
-                data = response.read(MAX_RESPONSE_BYTES + 1)
+                return response.read(MAX_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as exc:
+            exc.close()
             raise CloudUnavailable(f'http_{exc.code}') from None
         except (TimeoutError, OSError) as exc:
             # socket.timeout is an OSError; URLError wraps both.
@@ -78,6 +77,24 @@ def chat_client(protocol, base_url, model, api_key, headers=None):
             raise CloudUnavailable('timeout' if isinstance(reason, TimeoutError) or 'timed out' in str(reason) else 'network') from None
         except RuntimeError:
             raise CloudUnavailable('redirect') from None
+
+    def complete(messages, max_tokens, timeout):
+        system = '\n\n'.join(m['content'] for m in messages if m['role'] == 'system')
+        turns = [{'role': m['role'], 'content': m['content']} for m in messages if m['role'] != 'system']
+        if protocol == 'openai':
+            body = {'model': model, 'max_tokens': max_tokens,
+                    'messages': ([{'role': 'system', 'content': system}] if system else []) + turns}
+        else:
+            body = {'model': model, 'max_tokens': max_tokens, 'messages': turns}
+            if system:
+                body['system'] = system
+        try:
+            data = send(body if key in NO_TEMPERATURE else {**body, 'temperature': 0}, timeout)
+        except CloudUnavailable as error:
+            if error.reason != 'http_400' or key in NO_TEMPERATURE:
+                raise
+            NO_TEMPERATURE.add(key)
+            data = send(body, timeout)
         if len(data) > MAX_RESPONSE_BYTES:
             raise CloudUnavailable('response_too_large')
         try:
