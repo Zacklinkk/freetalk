@@ -222,10 +222,8 @@ final class CorrectionLearner {
         stop()
         // Web editors report the same text with different invisible characters
         // than they accepted (NBSP, zero-width space, CRLF); compare a normal form.
-        func plain(_ text: String) -> String {
-            text.replacingOccurrences(of:"\r\n",with:"\n").replacingOccurrences(of:"\u{00A0}",with:" ")
-                .replacingOccurrences(of:"\u{200B}",with:"").replacingOccurrences(of:"\u{FEFF}",with:"")
-        }
+        // Prefix and suffix slices must keep their edges, so only fold characters.
+        func plain(_ text: String) -> String { InsertionCheck.normalize(text, trimEnd: false) }
         let prefix = plain((target.value as NSString).substring(to:target.range.location))
         let suffix = plain((target.value as NSString).substring(from:target.range.location+target.range.length))
         let inserted = plain(inserted)
