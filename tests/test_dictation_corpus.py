@@ -142,6 +142,36 @@ class SegmentBoundaryTests(unittest.TestCase):
                 self.assertEqual(preclean(raw)[0], raw)
 
 
+class StrayPunctuationTests(unittest.TestCase):
+    """Deleting a filler next to a comma must not leave the comma behind."""
+
+    FIXED = [
+        ('，那个，你看一下日志有没有报错。', '那个，你看一下日志有没有报错。'),
+        ('，我觉得这个方案可以再简化一点。', '我觉得这个方案可以再简化一点。'),
+        ('我们先这样，。然后再说。', '我们先这样。然后再说。'),
+        ('先这样，，再看。', '先这样，再看。'),
+        ('保存文件。，下一步。', '保存文件。下一步。'),
+    ]
+    KEPT = ['一、先跑测试。二、再看结果。', '他说“，好的”。', '代码 `a,,b` 原样。', '问题是：为什么？', '今天：开会。', '先保存，然后关闭。']
+
+    def test_orphaned_marks_are_removed(self):
+        from edits import tidy_punctuation
+        for raw, expected in self.FIXED:
+            with self.subTest(raw=raw):
+                self.assertEqual(tidy_punctuation(raw)[0], expected)
+        for raw in self.KEPT:
+            with self.subTest(raw=raw):
+                self.assertEqual(tidy_punctuation(raw)[0], raw)
+
+    def test_a_deleted_leading_filler_takes_its_comma(self):
+        # The plan the local model actually produced for these sentences.
+        for raw, old in [('就是，我觉得这个方案可以再简化一点。', '就是'), ('那个，明天的会改到下午三点。', '那个')]:
+            with self.subTest(raw=raw):
+                text, _ = apply_plan(raw, {'repairs': [], 'edits': [{'old': old, 'new': '', 'kind': 'filler'}], 'breaks': [], 'bullets': []}, {})
+                from edits import tidy_punctuation
+                self.assertFalse(tidy_punctuation(text)[0].startswith('，'))
+
+
 class LayoutSafetyTests(unittest.TestCase):
     """A cleanup pass must never invent structure the speaker did not use."""
 

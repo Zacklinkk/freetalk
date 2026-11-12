@@ -120,6 +120,8 @@ class Editor:
         raw, term_count = normalize_spelling(raw, context)
         raw, alias_count = normalize_aliases(raw, context)
         text, meta = self._edit(raw, context, timeout, policy)
+        from edits import tidy_punctuation
+        text, meta['punctuation_tidied'] = tidy_punctuation(text)
         from numerals import normalize
         text, count = normalize(text, context.get('personal_terms', ()))
         meta['number_formats'] = count
