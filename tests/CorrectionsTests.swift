@@ -28,16 +28,22 @@ import Foundation
         let update=try store.learn(heard:"星禾知识库",term:"星河")!
         expect(try store.undo(update))
         expect((try store.aliases()).first { $0.heard == "星禾知识库" }?.term == "星河知识库")
-        // Chinese lessons need a vocabulary entry for the new word, the same pinyin
-        // and at least half the characters unchanged. Same pinyin alone also
-        // matches deliberate rewrites; the vocabulary entry is what tells them apart.
-        for (a,b,terms) in [("这个权利归你。","这个权力归你。",[String]()),     // no vocabulary evidence
-                            ("打开服装设置。","打开浮窗设置。",["浮窗"]),       // different pinyin
-                            ("请王小明处理。","请汪晓明处理。",["汪晓明"])] {   // 2 of 3 characters changed
-            precondition(CorrectionExtractor.propose(before:a,after:b,terms:terms) == nil, "\(a) → \(b)")
+        // Chinese lessons need the same length and pinyin at most one letter
+        // apart, so accent slips (z/zh, c/ch, n/ng) count. The new word does not
+        // have to be in the vocabulary yet; learning adds it.
+        for (a,b,old,new) in [("打开服装设置。","打开浮窗设置。","服装","浮窗"),   // zhuang/chuang
+                              ("这是国产动画。","这是过场动画。","国产","过场"),   // chan/chang
+                              ("进入插画环节。","进入插话环节。","插画","插话"),
+                              ("请王小明处理。","请汪晓明处理。","王小明","汪晓明"),
+                              ("联系李明，他负责。","联系黎明，他负责。","李明","黎明")] {
+            let pair = CorrectionExtractor.propose(before:a,after:b,terms:[])
+            precondition(pair?.0 == old && pair?.1 == new, "\(a) → \(b): \(String(describing: pair))")
         }
-        precondition(CorrectionExtractor.propose(before:"进入插画环节。",after:"进入插话环节。",terms:["插话"])! == ("插画","插话"))
-        precondition(CorrectionExtractor.propose(before:"联系李明，他负责。",after:"联系黎明，他负责。",terms:["黎明"])! == ("李明","黎明"))
+        for (a,b) in [("先开发功能。","先开花功能。"),     // two letters apart
+                      ("这样处理。","那样处理。"),         // different sound
+                      ("他们同意了。","她们同意了。")] {    // pronoun choice, not a mishearing
+            precondition(CorrectionExtractor.propose(before:a,after:b,terms:[]) == nil, "\(a) → \(b)")
+        }
         // Attribution: a span the recognizer produced is an ASR lesson; one only
         // the editor wrote is a cleanup lesson.
         precondition(CorrectionAttribution.stage(heard:"星禾知识库",raw:"打开星禾知识库",inserted:"打开星禾知识库") == .asr)
@@ -64,7 +70,7 @@ import Foundation
         let devices = MicDevices.all(), current = MicDevices.selected(uid:nil,devices:devices)
         precondition(current == nil || current!.id == MicDevices.defaultInputID())
         precondition(MicDevices.selected(uid:"missing-test-device",devices:devices) == nil)
-        print("Correction extraction, punctuation/meaning/number guards, pinyin+shared-character gate, ASR/cleanup attribution, reinforcement and decay, automatic learning, scoped undo, 0600, device resolution passed")
+        print("Correction extraction, punctuation/meaning/number guards, accent-tolerant pinyin gate, ASR/cleanup attribution, reinforcement and decay, automatic learning, scoped undo, 0600, device resolution passed")
         print("Current system input:",current?.name ?? "none")
     }
 }
