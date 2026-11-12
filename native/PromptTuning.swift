@@ -22,18 +22,19 @@ final class PromptTuningPanel: NSObject {
         adopt = app.button("采用新规则", #selector(adoptRules)); adopt.target = self
         discard = app.button("放弃", #selector(discardRules)); discard.target = self
         reset = app.button("恢复默认规则", #selector(resetRules)); reset.target = self
+        clear = app.button("清除记录", #selector(clearCases)); clear.target = self
         model.placeholderString = "可选 · 留空则用云端整理的模型；建议填同一服务里更强的模型"
         model.stringValue = UserDefaults.standard.string(forKey: "promptTuningModel") ?? ""
         model.setAccessibilityLabel("规则优化使用的模型")
         refresh()
-        clear = app.button("清除记录", #selector(clearCases)); clear.target = self
         return app.card("整理规则优化", "口述插入后你又改动的文字会记在本机。积累一些后，可以请云端模型总结成几条整理偏好；本机先用新旧规则重跑这些记录，结果给你看，你确认后才生效。", views: [
             summary, VoiceAppearance.form([("优化用模型", model)]), app.row([run, clear]), result, rules, app.row([adopt, discard, reset]),
             app.label("会发送到云端：这些记录的原稿、整理结果和你改后的文字，以及现有整理规则。使用「云端整理」里填的服务与密钥；不发送音频和窗口文字。", size: 11, color: .secondaryLabelColor)])
     }
 
     func refresh() {
-        guard run != nil else { return }
+        // Called by the learner and the sidebar too; the buttons exist only once the card is built.
+        guard run != nil, adopt != nil, discard != nil, reset != nil, clear != nil else { return }
         let count = store.load().count, active = CleanupPreferences.load(app.support)
         summary.stringValue = "已记录 \(count) 条插入后又被你改动的口述" + (active.isEmpty ? "，当前使用默认规则。" : "，当前使用 \(active.count) 条整理偏好：\n" + active.map { "· " + $0 }.joined(separator: "\n"))
         // Tuning needs the service and key, not cloud cleanup itself switched on.
