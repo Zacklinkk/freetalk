@@ -5,7 +5,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 app_dir="$(bash scripts/build-settings-preview.sh | tail -1)"
-"$app_dir/Contents/MacOS/freetalk" >/dev/null 2>&1 &
+# Skip window restoration: after an earlier crash AppKit would otherwise wait
+# on a "reopen windows?" prompt before the settings window is ever built.
+"$app_dir/Contents/MacOS/freetalk" -ApplePersistenceIgnoreState YES >/dev/null 2>&1 &
 pid=$!
 sleep "${SMOKE_SECONDS:-8}"
 if kill -0 "$pid" 2>/dev/null; then
