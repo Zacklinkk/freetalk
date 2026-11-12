@@ -83,6 +83,13 @@ class SummaryRobustnessTests(unittest.TestCase):
         self.assertEqual(len(facts) + rejected, 30)
         self.assertGreater(rejected, 0)
 
+    def test_malformed_rows_are_counted_not_dropped(self):
+        rows = validate_segments([dict(start=0, end=4, text='保留日志。')])
+        units, refs = source_units(rows)
+        candidate = expand_references({'facts': ['不是对象', 7, dict(kind='fact', topic='日志', refs=[units[0]['id']])]}, refs)
+        facts, rejected = validate_facts(candidate, rows)
+        self.assertEqual((len(facts), rejected), (1, 2))
+
     def test_blank_transcript_says_so(self):
         rows = validate_segments([dict(start=0, end=4, text='   '), dict(start=4, end=8, text='\n')])
         minutes, _ = summarize(rows, lambda *a, **k: '{"facts":[]}')
