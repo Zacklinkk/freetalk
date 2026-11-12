@@ -696,7 +696,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.inserter.insert(self.lastText, into: self.target) { success, message in
                         guard self.session == token else { return }
                         self.phase = .idle; self.hudTimer?.invalidate()
-                        self.currentEntry?.insertionStatus = message; self.saveResult()
+                        self.currentEntry?.insertionStatus = message; self.currentEntry?.insertionCheck = self.inserter.lastCheck; self.saveResult()
                         // The user chose the cloud; say so when this result came from the local model instead.
                         let notice = (cleanup["cloud_fallback"] as? String).map { "\(CloudEditorSettings.describe(fallback: $0))，已改用本地模型整理" }
                         self.hud.finish(success: success, message: message, notice: notice)

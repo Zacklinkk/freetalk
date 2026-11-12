@@ -606,8 +606,48 @@ struct InputSnapshot {
 
 }
 
+/// Compares what an editor reports after a paste with what was intended.
+///
+/// Web and Electron editors (ChatGPT, Feishu-like chat apps, Chrome pages)
+/// report their text through Accessibility with representation differences:
+/// a trailing block newline, non-breaking spaces, zero-width characters, a
+/// re-rendered node. Exact string equality called most of those pastes
+/// "unverifiable" even though the text had landed.
+enum InsertionCheck {
+    static func normalize(_ text: String, trimEnd: Bool = true) -> String {
+        var t = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        for (a, b) in [("\u{00A0}", " "), ("\u{200B}", ""), ("\u{200C}", ""), ("\u{200D}", ""), ("\u{FEFF}", ""), ("\u{2028}", "\n"), ("\u{2029}", "\n")] {
+            t = t.replacingOccurrences(of: a, with: b)
+        }
+        while trimEnd, let last = t.last, last == "\n" || last == " " { t.removeLast() }
+        return t
+    }
+
+    private static func count(_ needle: String, in haystack: String) -> Int {
+        guard !needle.isEmpty else { return 0 }
+        return haystack.components(separatedBy: needle).count - 1
+    }
+
+    /// `verified` is true only when the field shows the intended text, allowing
+    /// representation-only differences, or when one more copy of the inserted
+    /// text is present than before (the editor also reformatted around it).
+    /// `reason` is a short, content-free label for diagnostics.
+    static func check(original: String, inserted: String, expected: String, observed: String?) -> (verified: Bool, reason: String) {
+        guard let observed = observed else { return (false, "no_value") }
+        if observed == expected { return (true, "exact") }
+        let o = normalize(observed), e = normalize(expected), before = normalize(original), text = normalize(inserted)
+        if o == e { return (true, "normalized") }
+        if o == before { return (false, "unchanged") }
+        if text.count >= 4 && count(text, in: o) > count(text, in: before) { return (true, "contains_insert") }
+        if o.isEmpty { return (false, "cleared") }
+        return (false, "different")
+    }
+}
+
 final class TextInserter {
     private(set) var busy = false
+    /// How the last paste was (or was not) confirmed, for diagnostics.
+    private(set) var lastCheck = ""
     private var pendingRestore: (() -> Void)?
     func restoreBeforeExit() { pendingRestore?(); pendingRestore = nil }
     func insert(_ text: String, into target: InputSnapshot?, completion: @escaping (Bool, String) -> Void) {
@@ -677,14 +717,15 @@ final class TextInserter {
         func verify() {
             // Reacquire the AX node after web editors re-render their document.
             let nodes = [resolved, focusedElement(target.pid)].compactMap { $0 }
-            let verified = nodes.contains { node in
-                guard let value = axAttribute(node, kAXValueAttribute) as? String else { return false }
-                return value.replacingOccurrences(of: "\r\n", with: "\n") == expected.replacingOccurrences(of: "\r\n", with: "\n")
-            }
+            let checks = nodes.map { InsertionCheck.check(original: target.value, inserted: text, expected: expected,
+                                                         observed: axAttribute($0, kAXValueAttribute) as? String) }
+            let verified = checks.contains { $0.verified }
             if !verified && Date().timeIntervalSince(began) < 3 && clipboard.changeCount == ourChange {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: verify); return
             }
             restore(); self.pendingRestore = nil; self.busy = false
+            // Content-free label for history: what kind of mismatch, never the text.
+            self.lastCheck = (checks.first { $0.verified } ?? checks.first)?.reason ?? "no_node"
             completion(verified, verified ? "已插入 \(target.name)" : "粘贴已发送，应用未提供可核验结果；未重复粘贴，文字已保留")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: verify)

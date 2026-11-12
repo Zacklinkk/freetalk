@@ -16,6 +16,9 @@ struct VoiceHistoryEntry: Codable, Identifiable {
     var cleanupReason: String? = nil
     var appliedEdits: Int? = nil
     var rejectedEdits: Int? = nil
+    /// How a paste was confirmed (exact/normalized/contains_insert) or why not
+    /// (no_value/unchanged/different/cleared). Never contains text.
+    var insertionCheck: String? = nil
 }
 
 final class VoiceHistoryStore {
