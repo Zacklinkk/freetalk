@@ -2,6 +2,10 @@
 set -euo pipefail
 project_dir="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$project_dir"
+# Homophone checks need pypinyin; without it they silently degrade and a few
+# tests fail in a confusing way. Fail early with the install command instead.
+"${PYTHON:-python3}" -c 'import pypinyin' 2>/dev/null || {
+  printf '%s\n' 'Python tests need pypinyin: python3 -m pip install pypinyin==0.55.0' >&2; exit 1; }
 "${PYTHON:-python3}" -m unittest discover -s tests -p 'test_*.py' -v
 if [ "$(uname -s)" != Darwin ]; then
   printf '%s\n' 'Python tests complete. Native checks require macOS.'

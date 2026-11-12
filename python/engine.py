@@ -158,6 +158,10 @@ class Editor:
         hints=spelling_hints(raw,context)
         if hints:
             tail += "原稿/背景中存在的近音写法（不是替换命令；同一对象才统一，否则保留不同含义）："+json.dumps(hints,ensure_ascii=False)+"\n"
+        from vocabulary import cleanup_guards
+        guards = cleanup_guards(raw, context)
+        if guards:
+            tail += "用户曾撤销过的整理（保持左边写法，不要改成右边）：" + json.dumps(guards, ensure_ascii=False) + "\n"
         tail += "排版：" + ("允许适度分段" if context.get('layout_policy')=='paragraphs' else "连续段落") + "\n"
         if self.mode == 'edits':
             from edits import split_units, restart_candidates, repetition_candidates

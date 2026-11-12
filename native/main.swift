@@ -69,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let hotkeyRecorder = HotkeyRecorder()
     let hotkeyTester = HotkeyTestController()
     lazy var cloudEditor = CloudEditorPanel(app: self)
+    var learningStatus: NSTextField?
     var lastHotkeyAttempt = Date.distantPast
     var deviceList: [MicDevice] = []
     var target: InputSnapshot?
@@ -149,7 +150,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self=self else { return }
             self.undoableLearning.append(change); self.hud.hide()
             let count=self.undoableLearning.count
-            self.learningHUD.showLearning(title:count == 1 ? "已学会 \(change.alias.term)" : "已学会 \(count) 处改字",detail:"\(change.alias.heard) → \(change.alias.term) · 下次生效",anchor:anchor)
+            let source = change.alias.stage == .asr ? "识别" : "整理"
+            let repeated = change.reinforced ? " · 第 \(change.alias.count) 次" : ""
+            self.learningHUD.showLearning(title:count == 1 ? "已学会 \(change.alias.term)" : "已学会 \(count) 处改字",detail:"\(source)：\(change.alias.heard) → \(change.alias.term)\(repeated) · 下次生效",anchor:anchor)
+            self.learningStatus?.stringValue = "最近一次：已学会「\(change.alias.heard) → \(change.alias.term)」（\(source)阶段）"
+        }
+        correctionLearner.onStop = { [weak self] reason in
+            self?.learningStatus?.stringValue = "最近一次学习检查结束：\(reason)"
         }
         correctionLearner.onError = { [weak self] error in self?.setStatus("词库未更新：\(error)") }
         learningHUD.onUndo = { [weak self] in
@@ -572,7 +579,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if tutorialSession { hud.hide() } else { hud.show(target: target); monitorTarget() }
         var context = target?.context(enabled: contextButton.state == .on) ?? [:]
         context["personal_terms"] = personalTerms
-        context["personal_aliases"] = aliases.map { ["heard":$0.heard,"term":$0.term] }
+        // Strongest, most recent lessons first; ones that have faded no longer apply.
+        context["personal_aliases"] = aliases.filter { $0.weight() >= 0.25 }.sorted { $0.weight() > $1.weight() }
+            .map { ["heard":$0.heard,"term":$0.term,"stage":$0.stage.rawValue,"count":$0.count] }
         context["layout_policy"] = layoutPicker.indexOfSelectedItem == 1 ? "paragraphs" : "minimal"
         setStatus("正在打开麦克风…")
         let policy = ["auto", "always", "fast"][cleanupPicker.indexOfSelectedItem]
@@ -692,8 +701,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         let notice = (cleanup["cloud_fallback"] as? String).map { "\(CloudEditorSettings.describe(fallback: $0))，已改用本地模型整理" }
                         self.hud.finish(success: success, message: message, notice: notice)
                         self.setStatus(notice.map { "\(message) · \($0)" } ?? message)
-                        if success, self.learningButton.state == .on, let target = self.target {
-                            self.correctionLearner.start(target:target,inserted:self.lastText,store:self.correctionStore)
+                        // Watch for edits whenever the paste was delivered, verified or not:
+                        // many web editors cannot be read back right away yet still expose
+                        // their value a moment later. The learner stops itself, with a
+                        // recorded reason, if the field stays unreadable.
+                        if self.learningButton.state == .on, let target = self.target, success || message.hasPrefix("粘贴已发送") {
+                            self.correctionLearner.start(target:target,inserted:self.lastText,raw:self.lastRaw,store:self.correctionStore)
                         }
                         self.refreshDevices()
                     }

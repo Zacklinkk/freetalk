@@ -104,7 +104,7 @@ class AliasHygieneTests(unittest.TestCase):
             'personal_terms': ['插话'],
             'personal_aliases': [{'heard': '插画', 'term': '插话'}],
         })
-        self.assertEqual(ctx['personal_aliases'], [{'heard': '插画', 'term': '插话'}])
+        self.assertEqual([(a['heard'], a['term']) for a in ctx['personal_aliases']], [('插画', '插话')])
 
 
 class LayoutSafetyTests(unittest.TestCase):

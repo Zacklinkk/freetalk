@@ -7,12 +7,55 @@ struct CorrectionSuggestion: Codable {
     var id: String, heard: String, term: String
     var createdAt: Date
 }
-struct VocabularyAlias: Codable { var heard: String, term: String }
+/// Which stage produced the wrong word. The fix differs: an ASR mishearing
+/// becomes a recognizer hint, a cleanup rewrite becomes an editor constraint.
+enum CorrectionStage: String, Codable { case asr, cleanup }
+
+/// A learned "heard → term" pattern. Older files only stored heard/term; the
+/// rest decodes to neutral defaults so nothing is lost on upgrade.
+struct VocabularyAlias: Codable, Equatable {
+    var heard: String, term: String
+    var stage: CorrectionStage = .asr
+    var count: Int = 1
+    var lastSeen: Date = .distantPast
+    init(heard: String, term: String, stage: CorrectionStage = .asr, count: Int = 1, lastSeen: Date = .distantPast) {
+        self.heard = heard; self.term = term; self.stage = stage; self.count = count; self.lastSeen = lastSeen
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        heard = try c.decode(String.self, forKey: .heard); term = try c.decode(String.self, forKey: .term)
+        stage = (try? c.decode(CorrectionStage.self, forKey: .stage)) ?? .asr
+        count = max(1, (try? c.decode(Int.self, forKey: .count)) ?? 1)
+        lastSeen = (try? c.decode(Date.self, forKey: .lastSeen)) ?? .distantPast
+    }
+    /// Reinforcement decays: a pair confirmed once and never again fades out of
+    /// the active set, so a single mistaken lesson cannot persist indefinitely.
+    func weight(at now: Date = Date()) -> Double {
+        // An unknown date (a pair saved before dates were recorded) counts as
+        // fresh; CorrectionStore stamps it on first load so decay starts then.
+        let days = lastSeen == .distantPast ? 0 : max(0, now.timeIntervalSince(lastSeen) / 86_400)
+        return Double(count) * pow(0.5, days / 30)
+    }
+}
+
+/// Where a correction came from in the pipeline, decided by comparing what the
+/// recognizer heard (raw) with what cleanup produced (inserted).
+enum CorrectionAttribution {
+    /// `heard` is the span the user replaced in the inserted text. If it also
+    /// appears verbatim in the raw transcript, the recognizer produced it; if it
+    /// does not, cleanup introduced it.
+    static func stage(heard: String, raw: String, inserted: String) -> CorrectionStage {
+        if raw == inserted || raw.contains(heard) { return .asr }
+        return .cleanup
+    }
+}
 struct LearnedCorrection {
     let alias: VocabularyAlias
     let previous: VocabularyAlias?
     let addedTerm: Bool
     let wordsAfter: [String]
+    /// True when this confirmed an existing pair rather than adding a new one.
+    var reinforced: Bool { previous?.term == alias.term }
 }
 
 enum CorrectionExtractor {
@@ -57,7 +100,14 @@ enum CorrectionExtractor {
             // evidence that the speaker meant this word and the recognizer got
             // it wrong. Latin typos (SFY→SFT) are unambiguous and stay direct.
             let isChinese = old.unicodeScalars.contains { $0.value > 0x4E00 && $0.value < 0x9FFF }
-            if isChinese && !terms.contains(where: { $0 == new || $0.hasPrefix(new) || new.hasPrefix($0) }) { return nil }
+            if isChinese {
+                guard terms.contains(where: { $0 == new || $0.hasPrefix(new) || new.hasPrefix($0) }) else { return nil }
+                // A mishearing keeps the sound and most of the characters. Same
+                // pinyin alone also matches deliberate rewrites (权利→权力).
+                guard oldSound == newSound, old.count == new.count else { return nil }
+                let shared = zip(old, new).filter { $0 == $1 }.count
+                guard shared >= max(1, (old.count + 1) / 2) else { return nil }
+            }
             return (old,new)
         }
         // Prefer an already known compound word instead of learning only a suffix.
@@ -95,10 +145,17 @@ final class CorrectionStore {
             $0.heard.filter { $0.isLetter || $0.isNumber } != $0.term.filter { $0.isLetter || $0.isNumber }
         }
     }
-    func aliases() throws -> [VocabularyAlias] {
+    func aliases(now: Date = Date()) throws -> [VocabularyAlias] {
         let file = directory.appendingPathComponent("dictionary-aliases.json")
         guard FileManager.default.fileExists(atPath:file.path) else { return [] }
-        return try JSONDecoder().decode([VocabularyAlias].self,from:Data(contentsOf:file))
+        var rows = try JSONDecoder().decode([VocabularyAlias].self,from:Data(contentsOf:file))
+        // Pairs from before dates were recorded start their decay at upgrade time,
+        // instead of being treated as a year old and silently dropped.
+        if rows.contains(where: { $0.lastSeen == .distantPast }) {
+            for index in rows.indices where rows[index].lastSeen == .distantPast { rows[index].lastSeen = now }
+            try write(rows,to:"dictionary-aliases.json")
+        }
+        return rows
     }
     private func write<T: Encodable>(_ value: T, to name: String) throws {
         let file = directory.appendingPathComponent(name), encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted,.sortedKeys]
@@ -113,28 +170,33 @@ final class CorrectionStore {
     }
     func dismiss(_ id: String) throws { try write(try pending().filter { $0.id != id },to:"correction-suggestions.json") }
     func removeAlias(_ heard: String) throws { try write(try aliases().filter { $0.heard != heard },to:"dictionary-aliases.json") }
-    func accept(heard: String, term: String, id: String? = nil) throws {
+    func accept(heard: String, term: String, id: String? = nil, stage: CorrectionStage = .asr, now: Date = Date()) throws {
         let old = heard.trimmingCharacters(in:.whitespacesAndNewlines), new = term.trimmingCharacters(in:.whitespacesAndNewlines)
         _ = try VocabularyStore.validate([old,new])
         guard old.count >= 2, new.count >= 2, old != new else { throw VocabularyError.invalid("请填写不同的识别词和正确词，每项至少2个字母或汉字。") }
         var words = try vocabulary.load(); if !words.contains(new) { words.append(new) }; try vocabulary.save(words.joined(separator:"\n"))
-        var rows = try aliases(); rows.removeAll { $0.heard == old }; rows.insert(VocabularyAlias(heard:old,term:new),at:0)
+        var rows = try aliases()
+        // Seeing the same correction again is evidence; count it instead of resetting.
+        let same = rows.first { $0.heard == old && $0.term == new }
+        rows.removeAll { $0.heard == old }
+        rows.insert(VocabularyAlias(heard:old,term:new,stage:same?.stage ?? stage,count:(same?.count ?? 0) + 1,lastSeen:now),at:0)
         try write(Array(rows.prefix(200)),to:"dictionary-aliases.json")
         if let id = id { try dismiss(id) }
     }
-    func learn(heard: String, term: String) throws -> LearnedCorrection? {
+    func learn(heard: String, term: String, stage: CorrectionStage = .asr, now: Date = Date()) throws -> LearnedCorrection? {
         let rows=try aliases(), words=try vocabulary.load(), previous=rows.first { $0.heard == heard }
-        if previous?.term == term { return nil }
         guard rows.count < 200 || previous != nil else { throw VocabularyError.invalid("纠正关系已满，请先在词库中整理。") }
-        do { try accept(heard:heard,term:term) }
+        do { try accept(heard:heard,term:term,stage:stage,now:now) }
         catch { _ = try? vocabulary.save(words.joined(separator:"\n")); throw error }
-        return LearnedCorrection(alias:VocabularyAlias(heard:heard,term:term),previous:previous,addedTerm:!words.contains(term),wordsAfter:try vocabulary.load())
+        let stored = try aliases().first { $0.heard == heard } ?? VocabularyAlias(heard:heard,term:term,stage:stage)
+        return LearnedCorrection(alias:stored,previous:previous,addedTerm:!words.contains(term),wordsAfter:try vocabulary.load())
     }
     @discardableResult func undo(_ change: LearnedCorrection) throws -> Bool {
         var rows=try aliases()
         guard rows.first(where: { $0.heard == change.alias.heard })?.term == change.alias.term else { return false }
         let original=rows
         rows.removeAll { $0.heard == change.alias.heard }
+        // Undoing a reinforcement restores the earlier count rather than deleting the pair.
         if let previous=change.previous { rows.insert(previous,at:0) }
         try write(rows,to:"dictionary-aliases.json")
         do {
@@ -152,21 +214,38 @@ final class CorrectionLearner {
     var onLearn: ((LearnedCorrection, CGRect?) -> Void)?
     var onError: ((String) -> Void)?
     func stop() { timer?.invalidate(); timer = nil }
-    func start(target: InputSnapshot, inserted: String, store: CorrectionStore) {
+    /// Why the most recent session ended, for the diagnostics line in Settings.
+    private(set) var lastStop = ""
+    var onStop: ((String) -> Void)?
+    private func end(_ reason: String) { lastStop = reason; stop(); onStop?(reason) }
+    func start(target: InputSnapshot, inserted: String, raw: String, store: CorrectionStore) {
         stop()
-        let prefix = (target.value as NSString).substring(to:target.range.location)
-        let suffix = (target.value as NSString).substring(from:target.range.location+target.range.length)
+        // Web editors report the same text with different invisible characters
+        // than they accepted (NBSP, zero-width space, CRLF); compare a normal form.
+        func plain(_ text: String) -> String {
+            text.replacingOccurrences(of:"\r\n",with:"\n").replacingOccurrences(of:"\u{00A0}",with:" ")
+                .replacingOccurrences(of:"\u{200B}",with:"").replacingOccurrences(of:"\u{FEFF}",with:"")
+        }
+        let prefix = plain((target.value as NSString).substring(to:target.range.location))
+        let suffix = plain((target.value as NSString).substring(from:target.range.location+target.range.length))
+        let inserted = plain(inserted)
         var baseline = inserted, stableValue = "", stableSince = Date(), savedValue = ""
         var observedPairs = Set<String>()
         let began = Date()
+        lastStop = ""
         timer = Timer.scheduledTimer(withTimeInterval:0.6,repeats:true) { [weak self] _ in
-            guard Date().timeIntervalSince(began) <= 90, !IsSecureEventInputEnabled(),
-                  NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid,
-                  let focused = focusedElement(target.pid),
-                  !(axAttribute(focused,kAXSubroleAttribute) as? String ?? "").localizedCaseInsensitiveContains("secure") else { self?.stop(); return }
+            guard let self = self else { return }
+            if Date().timeIntervalSince(began) > 90 { self.end("90 秒内没有改字"); return }
+            if IsSecureEventInputEnabled() { self.end("进入安全输入"); return }
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else { self.end("切换到了其他应用"); return }
+            guard let focused = focusedElement(target.pid),
+                  !(axAttribute(focused,kAXSubroleAttribute) as? String ?? "").localizedCaseInsensitiveContains("secure") else { self.end("输入框失去焦点"); return }
             let same = CFEqual(focused,target.element) || (target.window != nil && axWindow(focused) != nil && CFEqual(target.window!,axWindow(focused)!) && target.identity.matchesReplacement(InputIdentity.read(focused)))
-            guard same, let value = axAttribute(focused,kAXValueAttribute) as? String, value.utf16.count <= 200_000,
-                  value.hasPrefix(prefix), value.hasSuffix(suffix), value.count >= prefix.count+suffix.count else { self?.stop(); return }
+            guard same else { self.end("焦点移到了另一个输入框"); return }
+            guard let read = axAttribute(focused,kAXValueAttribute) as? String, read.utf16.count <= 200_000 else { self.end("该应用不提供输入框文字"); return }
+            let value = plain(read)
+            // Sending a message empties the field: the session is over, not broken.
+            guard value.hasPrefix(prefix), value.hasSuffix(suffix), value.count >= prefix.count+suffix.count else { self.end(value.isEmpty ? "内容已发送或清空" : "插入位置之外的文字被改动"); return }
             let edited = String(value.dropFirst(prefix.count).dropLast(suffix.count))
             if edited == baseline { return }
             if edited != stableValue { stableValue = edited; stableSince = Date(); return }
@@ -175,8 +254,9 @@ final class CorrectionLearner {
             if let pair = CorrectionExtractor.propose(before:baseline,after:edited,terms:(try? store.vocabulary.load()) ?? []) {
                 let key=pair.0+"\u{0}"+pair.1
                 if observedPairs.insert(key).inserted {
-                    do { if let learned=try store.learn(heard:pair.0,term:pair.1) { self?.onLearn?(learned,target.anchor) } }
-                    catch { self?.onError?(error.localizedDescription) }
+                    let stage = CorrectionAttribution.stage(heard:pair.0,raw:raw,inserted:inserted)
+                    do { if let learned=try store.learn(heard:pair.0,term:pair.1,stage:stage) { self.onLearn?(learned,target.anchor) } }
+                    catch { self.onError?(error.localizedDescription) }
                 }
             }
             baseline=edited
