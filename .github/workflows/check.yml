@@ -18,6 +18,7 @@ jobs:
       - run: PYTHON=python bash scripts/test.sh
       - run: bash scripts/build.sh
       - run: codesign --verify --deep --strict build/freetalk.app
+      - run: bash scripts/smoke-settings.sh
       - run: python scripts/test-updater-integration.py
   publish-release:
     needs: test-and-build
