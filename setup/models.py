@@ -61,6 +61,8 @@ def valid_file(path, row):
 
 
 def load_catalog(path):
+    """Models in download order. Several entries may fill the same config key
+    (alternative ASR sizes); the first one for a key is the recommended default."""
     catalog = json.loads(path.read_text())
     if catalog.get('schema') != 1 or not catalog.get('models'):
         raise SetupError('模型清单版本不受支持')
@@ -70,9 +72,9 @@ def load_catalog(path):
             raise SetupError('模型来源无效')
         if not re.fullmatch(r'[0-9a-f]{40}', model['revision']):
             raise SetupError('模型版本未固定')
-        if model['key'] in seen or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]*', model['name']):
+        if model['name'] in seen or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]*', model['name']):
             raise SetupError('模型名称无效或重复')
-        seen.add(model['key'])
+        seen.add(model['name'])
         names = set()
         for row in model['files']:
             if not re.fullmatch(r'[a-zA-Z0-9_.-]+', row['name']) or row['name'].startswith('.') or row['name'] in names:
@@ -83,6 +85,27 @@ def load_catalog(path):
         if not names or type(model['bytes']) is not int or model['bytes'] != sum(row['size'] for row in model['files']):
             raise SetupError('模型总大小与文件清单不一致')
     return catalog['models']
+
+
+def sized_like(path, model):
+    """A cheap identity check: every file of `model` exists at `path` with its size."""
+    return isinstance(path, str) and all((Path(path) / row['name']).is_file() and
+                                         (Path(path) / row['name']).stat().st_size == row['size'] for row in model['files'])
+
+
+def choose(models, config, only):
+    """`only` is 'all', a config key, or a model name. For a key, keep the
+    alternative the user already uses; otherwise take the first (recommended)."""
+    named = [m for m in models if m['name'] == only]
+    if named:
+        return named
+    chosen = []
+    for key in dict.fromkeys(m['key'] for m in models):
+        if only not in {'all', key}:
+            continue
+        options = [m for m in models if m['key'] == key]
+        chosen.append(next((m for m in options if sized_like(config.get(key), m)), options[0]))
+    return chosen
 
 
 def fetch(url, target, row, progress=lambda amount: None, attempts=3, status=lambda **_: None):
@@ -177,19 +200,30 @@ def install(support, python, catalog, only='all', notify=emit, source='official'
             raise ValueError('not an object')
     except (ValueError, OSError) as error:
         raise SetupError('现有配置无法读取；已保留原文件，请先修复配置') from error
-    models = [m for m in load_catalog(catalog) if only in {'all', m['key']}]
+    catalog_models = load_catalog(catalog)
+    models = choose(catalog_models, config, only)
     if not models:
         raise SetupError('未选择可下载模型')
+    paths = config.get('modelPaths') if isinstance(config.get('modelPaths'), dict) else {}
     total = sum(m['bytes'] for m in models)
     completed = 0
     for model in models:
         notify(event='progress', stage='verify', message=f"检查 {model['title']}文件…", completed=completed, total=total)
-        existing = Path(config[model['key']]) if isinstance(config.get(model['key']), str) else None
-        if existing and all(valid_file(existing / row['name'], row) for row in model['files']):
+        # Remember where the alternative being replaced lives, so switching back
+        # is a local check instead of a second download.
+        current = config.get(model['key'])
+        for other in catalog_models:
+            if other['key'] == model['key'] and other['name'] != model['name'] and sized_like(current, other):
+                paths[other['name']] = current
+        directory = support / 'runtime' / 'models' / model['name'] / model['revision']
+        candidates = [p for p in (current, paths.get(model['name']), str(directory)) if isinstance(p, str)]
+        existing = next((Path(p) for p in dict.fromkeys(candidates) if sized_like(p, model) and
+                         all(valid_file(Path(p) / row['name'], row) for row in model['files'])), None)
+        if existing:
             completed += model['bytes']
+            config[model['key']] = paths[model['name']] = str(existing)
             notify(event='progress', stage='verified', message=f"{model['title']}已校验，无需下载", completed=completed, total=total)
             continue
-        directory = support / 'runtime' / 'models' / model['name'] / model['revision']
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Invalid existing files are kept until their replacement is verified,
         # so they still require room for a full replacement download.
@@ -231,7 +265,9 @@ def install(support, python, catalog, only='all', notify=emit, source='official'
             fetch(url, directory / row['name'], row, update, status=phase)
             completed += row['size']
         atomic_json(directory / 'freetalk-manifest.json', model)
-        config[model['key']] = str(directory)
+        config[model['key']] = paths[model['name']] = str(directory)
+    if paths:
+        config['modelPaths'] = paths
     defaults = {'maxRecordingSeconds': 180, 'cleanupTimeoutSeconds': 6, 'segmentMinSeconds': 8,
                 'segmentMaxSeconds': 20, 'silenceRms': .008, 'residentGiB': 5}
     for key, value in defaults.items():
@@ -247,7 +283,8 @@ if __name__ == '__main__':
     parser.add_argument('--support', type=Path, required=True)
     parser.add_argument('--python', type=Path, required=True)
     parser.add_argument('--catalog', type=Path, default=Path(__file__).with_name('catalog.json'))
-    parser.add_argument('--only', choices=['all', 'asrModel', 'cleanupModel', 'meetingDiarizationModel'], default='all')
+    # 'all', a config key, or a catalog model name (an alternative ASR size).
+    parser.add_argument('--only', type=lambda v: v if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,80}', v) else parser.error('invalid --only'), default='all')
     parser.add_argument('--source', choices=list(SOURCES), default='official')
     args = parser.parse_args()
     os.umask(0o077)

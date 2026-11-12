@@ -29,23 +29,19 @@ final class ModelDownloadView: NSStackView {
     private let progress = NSProgressIndicator()
     private let start = NSButton(), cancel = NSButton(), log = NSButton()
     private var statuses: [String:NSTextField] = [:]
-    private var downloads: [NSButton] = []
+    private var actions: [String:NSButton] = [:]
     init(app: AppDelegate) {
         self.app = app; super.init(frame:.zero)
         orientation = .vertical; alignment = .leading; spacing = 14
-        for item in ModelDownloadSource.allCases { source.addItem(withTitle:item.title) }
-        source.target = self; source.action = #selector(changeSource); source.setAccessibilityLabel("模型下载来源")
-        addArrangedSubview(app.row([app.label("模型下载源",size:12),source]))
-        for model in app.modelSetup.models {
-            let status = app.label("",size:12,color:.secondaryLabelColor); statuses[model.key] = status
-            let get = NSButton(title:"下载 / 校验",target:self,action:#selector(downloadOne(_:))); get.identifier = NSUserInterfaceItemIdentifier(model.key); get.bezelStyle = .rounded; downloads.append(get)
+        let models = app.modelSetup.models
+        for model in models {
+            let status = app.label("",size:12,color:.secondaryLabelColor); statuses[model.name] = status
+            let action = NSButton(title:"下载",target:self,action:#selector(useModel(_:))); action.identifier = NSUserInterfaceItemIdentifier(model.name); action.bezelStyle = .rounded; actions[model.name] = action
             let name = model.name.replacingOccurrences(of:"-[0-9]+bit$",with:"",options:.regularExpression)
-            let links = ModelDownloadSource.allCases.map { origin -> NSButton in
-                let button = NSButton(title:origin == .official ? "官方链接" : "镜像链接",target:self,action:#selector(openSource(_:)))
-                button.identifier = NSUserInterfaceItemIdentifier(model.key+":"+origin.rawValue); button.bezelStyle = .inline
-                return button
-            }
-            let box = app.card("\(model.title) · \(name)","\(model.bits)bit · \(ByteCountFormatter.string(fromByteCount:model.bytes,countStyle:.file)) · Apache 2.0",views:[app.row([status,get]+links)])
+            var views: [NSView] = []
+            if let note = model.note { views.append(app.label(note,size:12,color:.secondaryLabelColor)) }
+            views.append(app.row([status,action]))
+            let box = app.card("\(model.title) · \(name)","\(model.bits)bit · \(ByteCountFormatter.string(fromByteCount:model.bytes,countStyle:.file)) · \(model.license)",views:views)
             addArrangedSubview(box); box.widthAnchor.constraint(equalTo:widthAnchor).isActive = true
         }
         state.font = .systemFont(ofSize:12); state.textColor = .secondaryLabelColor; state.setAccessibilityLabel("模型下载状态")
@@ -55,16 +51,36 @@ final class ModelDownloadView: NSStackView {
         addArrangedSubview(detail); detail.widthAnchor.constraint(equalTo:widthAnchor).isActive = true
         start.title = "下载推荐模型与运行环境"; start.target = self; start.action = #selector(downloadAll); start.bezelStyle = .rounded; start.contentTintColor = talkAccent
         cancel.title = "取消下载"; cancel.target = self; cancel.action = #selector(cancelDownload); cancel.bezelStyle = .rounded
+        addArrangedSubview(app.row([start,cancel]))
+        addArrangedSubview(app.label("推荐模型约3.29 GB，建议预留8 GB空间。不需要账号或 API key；准备好后离线推理。",size:11,color:.secondaryLabelColor))
+        // Download source, model pages and the log matter only when a download fails.
+        for item in ModelDownloadSource.allCases { source.addItem(withTitle:item.title) }
+        source.target = self; source.action = #selector(changeSource); source.setAccessibilityLabel("模型下载来源")
         log.title = "查看下载日志"; log.target = self; log.action = #selector(showLog); log.bezelStyle = .inline
-        addArrangedSubview(app.row([start,cancel,log]))
-        addArrangedSubview(app.label("模型约3.29 GB，建议预留8 GB空间。镜像下载使用相同版本与 SHA-256 校验。\n来源切换只影响模型；首次准备运行环境仍需访问 GitHub / Astral 与 PyPI。\n不需要账号或 API key；准备好后离线推理。",size:11,color:.secondaryLabelColor))
+        var advanced: [NSView] = [app.row([app.label("模型下载源",size:12),source,log])]
+        for model in models {
+            let links = ModelDownloadSource.allCases.map { origin -> NSButton in
+                let button = NSButton(title:origin == .official ? "官方页面" : "镜像页面",target:self,action:#selector(openSource(_:)))
+                button.identifier = NSUserInterfaceItemIdentifier(model.name+":"+origin.rawValue); button.bezelStyle = .inline
+                return button
+            }
+            advanced.append(app.row([app.label(model.name,size:12)]+links))
+        }
+        advanced.append(app.label("镜像下载使用相同版本与 SHA-256 校验。来源切换只影响模型；首次准备运行环境仍需访问 GitHub / Astral 与 PyPI。",size:11,color:.secondaryLabelColor))
+        let section = DisclosureSection(title:"下载来源与日志",key:"modelSourceExpanded",views:advanced,spacing:10)
+        addArrangedSubview(section); section.widthAnchor.constraint(equalTo:widthAnchor).isActive = true
         refresh()
     }
     required init?(coder:NSCoder) { fatalError("init(coder:) has not been implemented") }
     func refresh() {
         let manager = app.modelSetup
         source.selectItem(at:ModelDownloadSource.allCases.firstIndex(of:.preferred) ?? 0); source.isEnabled = !manager.busy
-        for model in manager.models { statuses[model.key]?.stringValue = model.filesPresent(config:app.config) ? "文件已就绪 · 可重新校验" : "尚未安装" }
+        for model in manager.models {
+            let active = manager.isActive(model,config:app.config), present = manager.location(of:model,config:app.config) != nil
+            let choice = manager.hasAlternatives(model)
+            statuses[model.name]?.stringValue = active ? (choice ? "正在使用" : "文件已就绪") : present ? "已下载，未使用" : "尚未下载"
+            actions[model.name]?.title = active ? "重新校验" : present ? "改用这个" : choice && manager.models.contains(where: { $0.key == model.key && manager.isActive($0,config:app.config) }) ? "下载并改用" : "下载"
+        }
         state.stringValue = !manager.busy && !manager.failed && manager.fraction == 1
             ? (app.worker.ready ? "模型已校验并加载，可以开始使用。" : app.modelText)
             : manager.message
@@ -77,11 +93,13 @@ final class ModelDownloadView: NSStackView {
         progress.isHidden = !manager.busy && manager.fraction == nil
         start.title = manager.failed ? "重试下载" : ModelSetup.configured(app.config) ? "校验已安装模型 / 补齐下载" : "下载推荐模型与运行环境"
         start.isEnabled = !manager.busy && app.phase == .idle && !app.appUpdater.installing
-        for button in downloads { button.isEnabled = start.isEnabled }
+        for button in actions.values { button.isEnabled = start.isEnabled }
         cancel.isHidden = !manager.busy; cancel.isEnabled = manager.busy
     }
     @objc private func downloadAll() { app.beginModelDownload() }
-    @objc private func downloadOne(_ sender:NSButton) { app.beginModelDownload(only:sender.identifier?.rawValue ?? "all") }
+    /// Download, verify or switch to one model. Switching verifies the files,
+    /// points the configuration at them and reloads the worker.
+    @objc private func useModel(_ sender:NSButton) { app.beginModelDownload(only:sender.identifier?.rawValue ?? "all") }
     @objc private func cancelDownload() { app.modelSetup.cancel() }
     @objc private func changeSource() {
         guard !app.modelSetup.busy, ModelDownloadSource.allCases.indices.contains(source.indexOfSelectedItem) else { return }
@@ -91,7 +109,7 @@ final class ModelDownloadView: NSStackView {
     @objc private func openSource(_ sender:NSButton) {
         let parts = sender.identifier?.rawValue.split(separator:":").map(String.init) ?? []
         guard parts.count == 2, let origin = ModelDownloadSource(rawValue:parts[1]),
-              let model = app.modelSetup.models.first(where: { $0.key == parts[0] }), let url = model.pageURL(source:origin) else { return }
+              let model = app.modelSetup.models.first(where: { $0.name == parts[0] }), let url = model.pageURL(source:origin) else { return }
         NSWorkspace.shared.open(url)
     }
     @objc private func showLog() { NSWorkspace.shared.open(app.modelSetup.support.appendingPathComponent("setup.log")) }

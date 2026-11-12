@@ -81,7 +81,8 @@ extension AppDelegate {
         shortcutButton.state = UserDefaults.standard.object(forKey: "shortcutEnabled") as? Bool == false ? .off : .on
         let nearby = NSButton(checkboxWithTitle:"同时参考输入框周围的可见文字（仅本机）",target:self,action:#selector(windowContextChanged(_:)))
         nearby.state = UserDefaults.standard.bool(forKey:"windowContextEnabled") ? .on : .off
-        let cleanupCard = card("文字与操作", views: [VoiceAppearance.form([("整理",cleanupPicker),("排版",layoutPicker)]),contextButton,nearby,label("保留原意和细节。处理结束后，位置提示会在5秒后消失。",size:12,color:.secondaryLabelColor)])
+        let cleanupCard = card("文字整理", "只清理口误、改口和口水词，保留原意和细节。", views: [VoiceAppearance.form([("整理",cleanupPicker)])])
+        let detailCard = card("排版与上下文", views: [VoiceAppearance.form([("排版",layoutPicker)]),contextButton,nearby,label("处理结束后，位置提示会在5秒后消失。",size:12,color:.secondaryLabelColor)])
         dictationShortcutButton = NSButton(title: hotkey.binding.display, target: self, action: #selector(recordDictationShortcut))
         dictationShortcutButton.bezelStyle = .rounded
         meetingShortcutButton = NSButton(title: hotkey.meetingBinding.display, target: self, action: #selector(recordMeetingShortcut))
@@ -98,7 +99,12 @@ extension AppDelegate {
         ])
         permissionsLabel = label("",size:11,color:.secondaryLabelColor)
         let permissionCard = card("系统权限与输入兼容性", views: [permissionsLabel,row([button("逐项授权引导",#selector(showPermissionGuide)),button("麦克风",#selector(requestMic)),button("辅助功能",#selector(requestAX)),button("输入监控",#selector(requestKeys))]),button("5秒后测试输入",#selector(testInsertion)),label("切回目标输入框，将插入“freetalk 输入测试”，不会发送。",size:12,color:.secondaryLabelColor)])
-        addSettingsPage(settingsPage("语音输入", subtitle: "说完即写入当前光标位置，保持你的表达。", cards:[statusCard,limitCard,micCard,shortcutCard,cleanupCard,cloudEditor.makeCard(),permissionCard],scrollable:true))
+        // Everyday settings stay visible; the rest waits behind one disclosure row.
+        let advanced = DisclosureSection(title: "专业配置", subtitle: "录音时长、排版与上下文、云端整理、系统权限", key: "voiceAdvancedExpanded",
+                                         views: [limitCard,detailCard,cloudEditor.makeCard(),permissionCard])
+        // A missing permission needs the buttons in there; open it for this session only.
+        if VoicePermissions.current(shortcutActive:hotkey.active, shortcutFailure:hotkey.failure).needsGuidance { advanced.reveal() }
+        addSettingsPage(settingsPage("语音输入", subtitle: "说完即写入当前光标位置，保持你的表达。", cards:[statusCard,micCard,shortcutCard,cleanupCard,advanced],scrollable:true))
 
         resultView = NSTextView(); resultView.isEditable = false; resultView.isSelectable = true; resultView.isRichText = false
         resultView.font = .systemFont(ofSize:15); resultView.textContainerInset = NSSize(width:16,height:16)
@@ -119,13 +125,14 @@ extension AppDelegate {
         learningButton.state = UserDefaults.standard.object(forKey:"learnCorrections") as? Bool == false ? .off : .on
         addSettingsPage(settingsPage("常用词与学习",subtitle:"让名字、缩写和项目术语保持正确的拼写。",cards:[
             card("个人词库","每行一个词，保存你常用的写法。下一次录音起生效。",views:[button("管理常用词…",#selector(showVocabulary))]),
-            card("从改字学习","默认开启。输入后 90 秒内在同一输入框里改字，可靠的短词修正会自动学习，并显示5秒撤销提示。\n会区分是识别听错还是整理改错，分别用于语音识别和文字整理。标点、数量、否定和整段改写不学习；中文学读音相同或只差一个字母的改字（z/zh、c/ch、n/l、an/ang 这类口音差别），正确写法自动加入词库。重复出现会加强，长期未再出现会自动失效。",views:[learningButton,button("管理已学会的词…",#selector(showCorrections)),learningStatusLabel()]),
-            card("使用提示",views:[label("例如：星河知识库、项目名称、SFT。\n专业词在语音识别和文字整理时都会作为辨词参考。",color:.secondaryLabelColor)])]))
+            card("从改字学习","输入后 90 秒内在同一输入框里改字，可靠的短词修正会自动学习，并显示5秒撤销提示。",views:[learningButton,button("管理已学会的词…",#selector(showCorrections)),learningStatusLabel()]),
+            DisclosureSection(title:"专业配置",subtitle:"学习规则",key:"learningAdvancedExpanded",views:[
+                card("学习规则",views:[label("会区分是识别听错还是整理改错，分别用于语音识别和文字整理。标点、数量、否定和整段改写不学习；中文学读音相同或只差一个字母的改字（z/zh、c/ch、n/l、an/ang 这类口音差别），正确写法自动加入词库。重复出现会加强，长期未再出现会自动失效。\n专业词（例如星河知识库、项目名称、SFT）在语音识别和文字整理时都会作为辨词参考。",size:12,color:.secondaryLabelColor)])])],scrollable:true))
 
         modelLabel = label(modelText,color:.secondaryLabelColor)
         let downloads = ModelDownloadView(app:self); modelSetupView = downloads
         addSettingsPage(settingsPage("本地模型",subtitle:"下载、校验和运行，都可以在这里完成。",cards:[downloads,
-            card("运行状态",views:[modelLabel,row([button("重新加载模型",#selector(reloadModel)),button("打开本地文件夹",#selector(openModelStorage)),button("首次使用引导…",#selector(showOnboarding))]),label("模型常驻内存预算上限5 GiB，与磁盘大小不同。建议16 GB内存。\n音频不保存，转写历史和个人词库仅在本机。",size:12,color:.secondaryLabelColor)])]))
+            card("运行状态",views:[modelLabel,row([button("重新加载模型",#selector(reloadModel)),button("打开本地文件夹",#selector(openModelStorage)),button("首次使用引导…",#selector(showOnboarding))]),label("模型常驻内存预算上限5 GiB，与磁盘大小不同。建议16 GB内存。\n音频不保存，转写历史和个人词库仅在本机。",size:12,color:.secondaryLabelColor)])],scrollable:true))
         let updates = AppUpdateView(app:self); appUpdateView = updates
         addSettingsPage(settingsPage("软件更新",subtitle:"有新版时在这里提醒，由你决定何时更新。",cards:[updates]))
         let meeting = MeetingView(app:self); meetingView = meeting

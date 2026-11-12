@@ -13,10 +13,13 @@ struct DownloadModel: Decodable {
     let bits: Int
     let bytes: Int64
     let files: [File]
+    /// How this model differs from its alternatives, shown on the model card.
+    let note: String?
     func pageURL(source: ModelDownloadSource) -> URL? { URL(string:"\(source.endpoint)/\(repo)/tree/\(revision)") }
-    func filesPresent(config: [String: Any]) -> Bool {
-        guard let path = config[key] as? String else { return false }
-        return files.allSatisfy { file in
+    func filesPresent(config: [String: Any]) -> Bool { (config[key] as? String).map(filesPresent(at:)) ?? false }
+    /// A size check, not a hash check: enough to tell installed alternatives apart.
+    func filesPresent(at path: String) -> Bool {
+        files.allSatisfy { file in
             let attributes = try? FileManager.default.attributesOfItem(atPath: URL(fileURLWithPath: path).appendingPathComponent(file.name).path)
             return (attributes?[.size] as? NSNumber)?.int64Value == file.size
         }
@@ -58,6 +61,15 @@ final class ModelSetup {
         let data = try? Data(contentsOf: resources.appendingPathComponent("setup/\(catalogName)"))
         models = data.flatMap { try? JSONDecoder().decode(Catalog.self, from: $0).models } ?? []
     }
+    /// Where this model's files are, if present: the path in use for its key,
+    /// the remembered path of an alternative, or the default install directory.
+    func location(of model: DownloadModel, config: [String: Any]) -> String? {
+        let remembered = (config["modelPaths"] as? [String: Any])?[model.name] as? String
+        let standard = support.appendingPathComponent("runtime/models/\(model.name)/\(model.revision)").path
+        return [config[model.key] as? String, remembered, standard].compactMap { $0 }.first(where: model.filesPresent(at:))
+    }
+    func isActive(_ model: DownloadModel, config: [String: Any]) -> Bool { model.filesPresent(config: config) }
+    func hasAlternatives(_ model: DownloadModel) -> Bool { models.filter { $0.key == model.key }.count > 1 }
     static func configured(_ config: [String: Any]) -> Bool {
         guard let python = config["python"] as? String, FileManager.default.isExecutableFile(atPath: python) else { return false }
         return ["asrModel", "cleanupModel"].allSatisfy { key in
@@ -69,7 +81,8 @@ final class ModelSetup {
         }
     }
     func start(config: [String: Any], only: String = "all", source: ModelDownloadSource = .official) {
-        guard !busy, only == "all" || models.contains(where: { $0.key == only }) else { return }
+        // `only` is "all", a config key, or a model name (one of several alternatives).
+        guard !busy, only == "all" || models.contains(where: { $0.key == only || $0.name == only }) else { return }
         guard !models.isEmpty else { message = "安装包缺少模型清单，请重新构建。"; failed = true; onChange?(); return }
         let task = Process(), output = Pipe()
         task.executableURL = URL(fileURLWithPath: "/bin/bash")
