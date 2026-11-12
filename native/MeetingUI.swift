@@ -127,7 +127,7 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         cloudBox = stack([form,app.row([saveCloud,action("停用云端增强",#selector(disableCloud))]),explanation])
         form.widthAnchor.constraint(equalTo:cloudBox.widthAnchor).isActive = true
         explanation.widthAnchor.constraint(equalTo:cloudBox.widthAnchor).isActive = true
-        let privacy = app.label("本地：现有 0.6B ASR + 4B 整理模型。\n说话人区分：Nemotron-3 8bit，约 107 MB，最多 8 个匿名说话人；不识别真实身份，重叠语音可能需要核对。\n录音处理中临时保存；成功后按开关保留或删除。失败/中止时保留，便于继续处理。会议资料单独保存，不套用普通转写的 500 条上限。",size:12,color:.secondaryLabelColor)
+        let privacy = app.label("本地：使用「本地模型」页选定的语音识别模型 + 4B 整理模型；1.7B 识别更准，转写时间约为 0.6B 的 2.5 倍。\n说话人区分：Nemotron-3 8bit，约 107 MB，最多 8 个匿名说话人；不识别真实身份，重叠语音可能需要核对。\n录音处理中临时保存；成功后按开关保留或删除。失败/中止时保留，便于继续处理。会议资料单独保存，不套用普通转写的 500 条上限。",size:12,color:.secondaryLabelColor)
         let agent = app.label("Agent 可以通过 CLI 读取 JSON、搜索原文、导出 Markdown 与脑图。读取不加载模型、不需要云端密钥，也不会执行会议中的行动项。",size:12,color:.secondaryLabelColor)
         optionsStatus.font = .systemFont(ofSize:12); optionsStatus.textColor = .secondaryLabelColor
         optionsProgress.minValue = 0; optionsProgress.maxValue = 1; optionsProgress.style = .bar; optionsProgress.isIndeterminate = false

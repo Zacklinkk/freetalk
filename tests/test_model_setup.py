@@ -214,6 +214,47 @@ class ModelSetupTests(unittest.TestCase):
         self.assertFalse((self.root / 'config.json').exists())
         self.assertEqual(target.read_bytes(), b'x' * len(self.data))
 
+    def alternatives(self):
+        """Two ASR sizes for one config key; the first is the recommended default."""
+        big = b'a larger model fixture\n' * 700
+        self.big = {'name': 'model.safetensors', 'size': len(big), 'sha256': hashlib.sha256(big).hexdigest()}
+        rows = [{'key': 'asrModel', 'name': 'small-asr', 'title': '语音识别', 'repo': 'test/small', 'revision': 'a'*40,
+                 'bytes': len(self.data), 'files': [self.row]},
+                {'key': 'asrModel', 'name': 'large-asr', 'title': '语音识别', 'repo': 'test/large', 'revision': 'b'*40,
+                 'bytes': len(big), 'files': [self.big]}]
+        path = self.root / 'catalog.json'
+        path.write_text(json.dumps({'schema': 1, 'models': rows}))
+        return path, big
+
+    def test_alternatives_share_a_key_but_not_a_name(self):
+        path, _ = self.alternatives()
+        self.assertEqual([m['name'] for m in setup.load_catalog(path)], ['small-asr', 'large-asr'])
+        data = json.loads(path.read_text()); data['models'][1]['name'] = 'small-asr'; path.write_text(json.dumps(data))
+        with self.assertRaises(setup.SetupError):
+            setup.load_catalog(path)
+
+    def test_all_keeps_the_alternative_in_use_and_defaults_to_the_first(self):
+        path, big = self.alternatives()
+        models = setup.load_catalog(path)
+        self.assertEqual([m['name'] for m in setup.choose(models, {}, 'all')], ['small-asr'])
+        large = self.root / 'large'; large.mkdir(); (large / 'model.safetensors').write_bytes(big)
+        self.assertEqual([m['name'] for m in setup.choose(models, {'asrModel': str(large)}, 'asrModel')], ['large-asr'])
+        self.assertEqual([m['name'] for m in setup.choose(models, {}, 'large-asr')], ['large-asr'])
+
+    def test_switching_back_reuses_the_verified_copy_without_network(self):
+        path, big = self.alternatives()
+        small = self.root / 'small'; small.mkdir(); (small / 'model.safetensors').write_bytes(self.data)
+        large = self.root / 'runtime/models/large-asr' / ('b' * 40); large.mkdir(parents=True)
+        (large / 'model.safetensors').write_bytes(big)
+        (self.root / 'config.json').write_text(json.dumps({'asrModel': str(small)}))
+        with patch.object(setup, 'fetch', side_effect=AssertionError('unexpected network')):
+            config = setup.install(self.root, Path('/py'), path, 'large-asr', notify=lambda **_: None)
+            self.assertEqual(config['asrModel'], str(large))
+            self.assertEqual(config['modelPaths']['small-asr'], str(small))
+            config = setup.install(self.root, Path('/py'), path, 'small-asr', notify=lambda **_: None)
+        self.assertEqual(config['asrModel'], str(small))
+        self.assertEqual(json.loads((self.root / 'config.json').read_text())['asrModel'], str(small))
+
 
 if __name__ == '__main__':
     unittest.main()
