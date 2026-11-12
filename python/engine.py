@@ -246,6 +246,9 @@ class Editor:
 
     def _cloud_plan(self, base, user, max_tokens):
         from cloud_client import json_object
+        # Thinking models count their reasoning toward max_tokens, so a cap sized
+        # for the JSON plan alone would truncate them; the timeout still bounds it.
+        max_tokens = max(max_tokens, 2048)
         self.emit({"event": "model-request", "stage": "edit", "engine": "cloud", "model": self.remote.model,
                    "max_tokens": max_tokens})
         reply = self.remote(base + [{"role": "user", "content": user}], max_tokens, self.remote_timeout)

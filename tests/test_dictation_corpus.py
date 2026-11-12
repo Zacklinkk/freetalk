@@ -107,6 +107,41 @@ class AliasHygieneTests(unittest.TestCase):
         self.assertEqual([(a['heard'], a['term']) for a in ctx['personal_aliases']], [('插画', '插话')])
 
 
+class SegmentBoundaryTests(unittest.TestCase):
+    """Dictation is transcribed in pause-delimited pieces, and the recognizer
+    ends every piece with a terminal mark even when the pause fell mid-sentence."""
+
+    FIXED = [
+        # A sentence-final particle said after the pause.
+        ('之前必须要写入配置，但现在已经不需要写入配置。或者不写入配置，效果会更好。的',
+         '之前必须要写入配置，但现在已经不需要写入配置。或者不写入配置，效果会更好的。'),
+        ('这个版本能今天发出去。吗', '这个版本能今天发出去吗？'),
+        ('我已经测完。了，可以合并。', '我已经测完了，可以合并。'),
+        ('先跑一遍回归。吧！', '先跑一遍回归吧！'),
+        # A connective left alone between two marks.
+        ('新链接也要做对应的修改。或者。旧的表格应该也能改吧。', '新链接也要做对应的修改。或者，旧的表格应该也能改吧。'),
+        ('先保留日志。而且。不要覆盖原件。', '先保留日志。而且，不要覆盖原件。'),
+    ]
+
+    KEPT = [
+        '这是他写的。的确如此。',
+        '我说完了。了解一下背景再决定。',
+        '去吧台点单。吧台在左边。',
+        '他说“好的。吧”是错字，原样保留。',
+        '或者。',
+    ]
+
+    def test_stranded_pieces_rejoin(self):
+        for raw, expected in self.FIXED:
+            with self.subTest(raw=raw):
+                self.assertEqual(preclean(raw)[0], expected)
+
+    def test_real_sentence_starts_are_kept(self):
+        for raw in self.KEPT:
+            with self.subTest(raw=raw):
+                self.assertEqual(preclean(raw)[0], raw)
+
+
 class LayoutSafetyTests(unittest.TestCase):
     """A cleanup pass must never invent structure the speaker did not use."""
 

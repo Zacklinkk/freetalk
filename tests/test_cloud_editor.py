@@ -36,6 +36,9 @@ class Provider(BaseHTTPRequestHandler):
             self.send_response(503); self.end_headers(); self.wfile.write(b'{"secret":"echoed key"}'); return
         if mode == 'redirect':
             self.send_response(302); self.send_header('Location', 'https://example.invalid/'); self.end_headers(); return
+        if mode == 'no_sampling' and 'temperature' in body or mode == 'bad_request':
+            # Newer models reject a non-default temperature.
+            self.send_response(400); self.end_headers(); self.wfile.write(b'{"error":"bad request"}'); return
         text = json.dumps(PLAN, ensure_ascii=False) if mode != 'prose' else '我觉得不需要修改。'
         if body.get('max_tokens') == 32:
             text = '{"ok":true}'
@@ -106,6 +109,23 @@ class CloudClientTests(unittest.TestCase):
 
     def test_probe(self):
         self.assertGreaterEqual(probe(chat_client('anthropic', self.base, 'small', 'k-test'), 5), 0)
+
+    def test_model_that_rejects_temperature_is_retried_once_without_it(self):
+        Provider.mode = 'no_sampling'
+        client = chat_client('anthropic', self.base, 'new-model', 'k-test')
+        self.assertEqual(json_object(client(self.messages(), 100, 5)), PLAN)
+        self.assertEqual(['temperature' in r['body'] for r in Provider.requests], [True, False])
+        # The next utterance builds a new client; the refusal is remembered, so
+        # it does not pay a 400 again.
+        chat_client('anthropic', self.base, 'new-model', 'k-test')(self.messages(), 100, 5)
+        self.assertEqual(['temperature' in r['body'] for r in Provider.requests], [True, False, False])
+        # A 400 for another reason is retried at most once per model, then reported.
+        Provider.mode, Provider.requests = 'bad_request', []
+        other = chat_client('anthropic', self.base, 'other-model', 'k-test')
+        for expected in (2, 3):
+            with self.assertRaises(CloudUnavailable) as caught:
+                other(self.messages(), 100, 5)
+            self.assertEqual((caught.exception.reason, len(Provider.requests)), ('http_400', expected))
 
     def test_json_object_tolerates_a_fence_only(self):
         self.assertEqual(json_object('```json\n{"a":1}\n```'), {'a': 1})
