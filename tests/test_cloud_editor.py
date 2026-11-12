@@ -210,6 +210,14 @@ class CloudRoutingTests(unittest.TestCase):
         e.edit(RAW, context, policy='always')
         self.assertIn('VISIBLE-WINDOW-SECRET', e.local_calls[0])
 
+    def test_output_never_starts_with_a_stray_comma(self):
+        # The plan the local model produced for this sentence: drop the filler,
+        # leave its comma. The comma must not reach the text field.
+        plan = {"repairs": [], "edits": [{"old": "那个", "new": "", "kind": "filler"}], "breaks": [], "bullets": []}
+        text, meta = editor(local_plan=plan).edit('那个，明天的会改到下午三点。', {}, policy='always')
+        self.assertEqual(text, '明天的会改到下午3点。')
+        self.assertEqual(meta['punctuation_tidied'], 1)
+
     def test_fast_routes_never_call_the_cloud(self):
         cloud = remote(json.dumps(PLAN, ensure_ascii=False))
         text, meta = editor(cloud).edit('保存文件。', {}, policy='auto')

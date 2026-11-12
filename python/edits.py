@@ -187,6 +187,23 @@ def repeats_reverted_cleanup(old,new,context):
         if heard and term and a.count(term)>b.count(term) and b.count(heard)>a.count(heard): return True
     return False
 
+def tidy_punctuation(text):
+    """Remove punctuation a deletion left without its words.
+
+    Dropping a sentence-initial filler ("然后，那个，你看一下" minus 然后) or a
+    trailing one ("先这样，嗯。" minus 嗯) leaves a comma at the start of a
+    sentence or in front of the final mark. ASR does not produce these, so they
+    are removed wherever they occur outside code, links and quotes.
+    """
+    spans = [(m.start(), m.end()) for m in LITERALS.finditer(text)]
+    patches = []
+    pattern = r'(?:^|(?<=[。！？!?\n]))[ \t]*[，,、；;：:]+[ \t]*|[，,、；;]+(?=[。！？!?])|(?<=[，,、])[，,、]+'
+    for m in re.finditer(pattern, text):
+        if m.end() > m.start() and not any(m.start() < b and m.end() > a for a, b in spans):
+            patches.append((m.start(), m.end(), ''))
+    return replace_spans(text, patches), len(patches)
+
+
 def replace_spans(raw, patches):
     for left,right,new in sorted(patches,reverse=True): raw=raw[:left]+new+raw[right:]
     return raw
