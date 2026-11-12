@@ -20,6 +20,18 @@ os.umask(0o077)
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+def prompt(name):
+    """A prompt file with shared fragments expanded (`{{edit-rules}}` → prompts/edit-rules.txt).
+
+    The edit and restart prompts share their repair/edit/layout rules; keeping
+    them in one file stops the two copies drifting apart.
+    """
+    text = (ROOT / 'prompts' / name).read_text()
+    for marker in set(re.findall(r'\{\{([a-z-]+)\}\}', text)):
+        text = text.replace('{{' + marker + '}}', (ROOT / 'prompts' / (marker + '.txt')).read_text().removesuffix('\n'))
+    return text
+
 from cloud_client import CloudUnavailable
 
 
@@ -36,7 +48,11 @@ def guard_edit(raw, edited):
         return "large_change"
     # Concrete repairs have already been applied to this comparison baseline.
     # A random correction keyword elsewhere must not permit other number changes.
-    numbers = lambda text: re.findall(r"\d+(?:[.:/-]\d+)*", re.sub(r"(?m)^\s*\d+[.)、]\s+", "", text))
+    # Compare values, not spellings: 三点→3点 is a format change, 九点→十点 is
+    # not. The same context-aware normalizer the output uses decides what a
+    # number is, so idioms such as 一心一意 or 十万火急 are left alone.
+    from numerals import normalize as normalize_numbers
+    numbers = lambda text: re.findall(r"\d+(?:[.:/-]\d+)*", re.sub(r"(?m)^\s*\d+[.)、]\s+", "", normalize_numbers(text)[0]))
     if sorted(numbers(raw)) != sorted(numbers(edited)):
         return "number_change"
     for literal in re.findall(r"`[^`]+`|https?://[^\s，。]+", raw):
@@ -65,7 +81,7 @@ class Editor:
         self.model, self.tokenizer = load(model_path, tokenizer_config={"trust_remote_code": False})
         prompt_file = 'edit-plan.txt' if mode == 'edits' else 'cleanup.txt'
         example_file = 'edit-plan-examples.json' if mode == 'edits' else 'examples.json'
-        self.base = [{"role": "system", "content": (ROOT / 'prompts' / prompt_file).read_text()}]
+        self.base = [{"role": "system", "content": prompt(prompt_file)}]
         examples = json.loads((ROOT / 'prompts' / example_file).read_text())
         # Keep positive and negative examples; avoid nine competing mini-dialogues
         # that the small model can accidentally continue instead of editing the input.
@@ -77,7 +93,7 @@ class Editor:
         # Isolate the new discourse operation from the established edit prompt.
         # Both caches share the same weights and are warmed at startup, not on stop.
         if mode == 'edits':
-            self.restart_base = [{"role":"system","content":(ROOT / 'prompts' / 'restart-plan.txt').read_text()}]
+            self.restart_base = [{"role":"system","content":prompt('restart-plan.txt')}]
             self.restart_base += json.loads((ROOT / 'prompts' / 'restart-plan-examples.json').read_text())
             self.restart_prefix, self.restart_cache = self.prepare_prefix(self.restart_base)
 

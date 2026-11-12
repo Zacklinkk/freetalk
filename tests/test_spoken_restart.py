@@ -80,5 +80,25 @@ class SpokenRestartTests(unittest.TestCase):
         self.assertEqual(normalize('保留品牌名称 Nova 五。', ['Nova 五'])[0], '保留品牌名称 Nova 五。')
 
 
+    def test_cue_that_opens_the_restatement(self):
+        # "周一部署。算了，周三部署，因为…" — only the old sentence and the cue go.
+        for raw, expected in [
+            ('周一部署。算了，周三部署，因为周二要冻结代码，冻结期间不能改动。', '周三部署，因为周二要冻结代码，冻结期间不能改动。'),
+            ('只跑验证集。哎算了，验证集和测试集都跑，因为要对比两版，记得保存日志。都跑完以后发我结果。',
+             '验证集和测试集都跑，因为要对比两版，记得保存日志。都跑完以后发我结果。'),
+            ('预算上限八百元。只测试中文。算了，中英文都测试。', '预算上限八百元。中英文都测试。'),
+        ]:
+            with self.subTest(raw=raw):
+                plan = {'restarts': restart_candidates(raw)[:1], 'edits': [], 'breaks': [], 'bullets': []}
+                self.assertEqual(apply_plan(raw, plan, {})[0], expected)
+        # A cue with no restatement, or an unrelated new topic, is not a withdrawal.
+        for raw in ['先买十个，算了。', '我们讨论了很久。算了，今天先到这里。', '如果下雨就不去。算了，我们改天再约。']:
+            with self.subTest(raw=raw):
+                self.assertEqual(restart_candidates(raw), [])
+        # A withdrawn sentence's own condition may not vanish through the inline path.
+        raw = '如果下雨就不去公园。算了，去公园。'
+        plan = {'restarts': [{'drop': [0], 'keep': [1], 'cue': '算了'}], 'edits': [], 'breaks': [], 'bullets': []}
+        self.assertEqual(apply_plan(raw, plan, {})[0], raw)
+
 if __name__ == '__main__':
     unittest.main()
