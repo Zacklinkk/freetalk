@@ -69,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let hotkeyRecorder = HotkeyRecorder()
     let hotkeyTester = HotkeyTestController()
     lazy var cloudEditor = CloudEditorPanel(app: self)
+    lazy var promptTuning = PromptTuningPanel(app: self)
     var learningStatus: NSTextField?
     var lastHotkeyAttempt = Date.distantPast
     var deviceList: [MicDevice] = []
@@ -157,6 +158,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         correctionLearner.onStop = { [weak self] reason in
             self?.learningStatus?.stringValue = "最近一次学习检查结束：\(reason)"
+        }
+        correctionLearner.onCleanupEdit = { [weak self] in
+            self?.learningStatus?.stringValue = "最近一次：你改动了整理写出的文字，已记下，可用于优化整理规则"
+        }
+        correctionLearner.onFinish = { [weak self] raw, inserted, final in
+            guard let self = self, self.promptTuning.store.record(raw: raw, inserted: inserted, final: final) else { return }
+            self.promptTuning.refresh()
         }
         correctionLearner.onError = { [weak self] error in self?.setStatus("词库未更新：\(error)") }
         learningHUD.onUndo = { [weak self] in
@@ -557,7 +565,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !meetings.busy else { showMeetings(); return }
         if phase == .recording { stopRecording(); return }
         if phase == .preparing { cancelRecording(reload:false); return }
-        guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !appUpdater.installing else { return }
+        guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !appUpdater.installing, !promptTuning.busy else {
+            if promptTuning.busy { setStatus("整理规则优化进行中，完成后再口述") }
+            return
+        }
         tutorialSession = onboarding.wantsTrial
         if tutorialSession { onboarding.begin() }
         correctionLearner.stop(); learningHUD.hide()

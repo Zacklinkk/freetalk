@@ -214,7 +214,16 @@ final class CorrectionLearner {
     private var timer: Timer?
     var onLearn: ((LearnedCorrection, CGRect?) -> Void)?
     var onError: ((String) -> Void)?
-    func stop() { timer?.invalidate(); timer = nil }
+    /// The text the user left when a session ends, with what was heard and
+    /// inserted, so cleanup mistakes can be collected for prompt tuning.
+    var onFinish: ((_ raw: String, _ inserted: String, _ final: String) -> Void)?
+    var onCleanupEdit: (() -> Void)?
+    private var session: (raw: String, inserted: String, final: String?)?
+    func stop() {
+        timer?.invalidate(); timer = nil
+        if let current = session, let final = current.final { onFinish?(current.raw, current.inserted, final) }
+        session = nil
+    }
     /// Why the most recent session ended, for the diagnostics line in Settings.
     private(set) var lastStop = ""
     var onStop: ((String) -> Void)?
@@ -231,7 +240,7 @@ final class CorrectionLearner {
         var baseline = inserted, stableValue = "", stableSince = Date(), savedValue = ""
         var observedPairs = Set<String>()
         let began = Date()
-        lastStop = ""
+        lastStop = ""; session = (raw, inserted, nil)
         timer = Timer.scheduledTimer(withTimeInterval:0.6,repeats:true) { [weak self] _ in
             guard let self = self else { return }
             if Date().timeIntervalSince(began) > 90 { self.end("90 秒内没有改字"); return }
@@ -246,6 +255,7 @@ final class CorrectionLearner {
             // Sending a message empties the field: the session is over, not broken.
             guard value.hasPrefix(prefix), value.hasSuffix(suffix), value.count >= prefix.count+suffix.count else { self.end(value.isEmpty ? "内容已发送或清空" : "插入位置之外的文字被改动"); return }
             let edited = String(value.dropFirst(prefix.count).dropLast(suffix.count))
+            self.session?.final = edited == inserted ? nil : edited
             if edited == baseline { return }
             if edited != stableValue { stableValue = edited; stableSince = Date(); return }
             guard Date().timeIntervalSince(stableSince) >= 1.5, savedValue != edited else { return }
@@ -253,9 +263,13 @@ final class CorrectionLearner {
             if let pair = CorrectionExtractor.propose(before:baseline,after:edited,terms:(try? store.vocabulary.load()) ?? []) {
                 let key=pair.0+"\u{0}"+pair.1
                 if observedPairs.insert(key).inserted {
-                    let stage = CorrectionAttribution.stage(heard:pair.0,raw:raw,inserted:inserted)
-                    do { if let learned=try store.learn(heard:pair.0,term:pair.1,stage:stage) { self.onLearn?(learned,target.anchor) } }
-                    catch { self.onError?(error.localizedDescription) }
+                    // A word only cleanup wrote is not a recognizer lesson. The whole
+                    // session is reported through onFinish and feeds prompt tuning.
+                    if CorrectionAttribution.stage(heard:pair.0,raw:raw,inserted:inserted) == .cleanup { self.onCleanupEdit?() }
+                    else {
+                        do { if let learned=try store.learn(heard:pair.0,term:pair.1,stage:.asr) { self.onLearn?(learned,target.anchor) } }
+                        catch { self.onError?(error.localizedDescription) }
+                    }
                 }
             }
             baseline=edited

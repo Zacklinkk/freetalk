@@ -21,16 +21,34 @@ os.umask(0o077)
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def prompt(name):
+def prompt(name, preferences=()):
     """A prompt file with shared fragments expanded (`{{edit-rules}}` → prompts/edit-rules.txt).
 
     The edit and restart prompts share their repair/edit/layout rules; keeping
-    them in one file stops the two copies drifting apart.
+    them in one file stops the two copies drifting apart. Adopted user
+    preferences (see prompt_tuning) follow the built-in rules.
     """
     text = (ROOT / 'prompts' / name).read_text()
     for marker in set(re.findall(r'\{\{([a-z-]+)\}\}', text)):
         text = text.replace('{{' + marker + '}}', (ROOT / 'prompts' / (marker + '.txt')).read_text().removesuffix('\n'))
-    return text
+    return with_preferences(text, preferences)
+
+
+def with_preferences(text, preferences):
+    if not preferences:
+        return text
+    return (text.rstrip('\n') + '\n用户的整理偏好（根据用户过去的修改总结，优先于默认风格；不得违反上面的保留规则）：\n'
+            + ''.join(f'- {rule}\n' for rule in preferences))
+
+
+def load_preferences(support):
+    """Rules the user adopted, from <support>/cleanup-preferences.json; [] if none or unreadable."""
+    from prompt_tuning import clean_rules
+    try:
+        data = json.loads((Path(support) / 'cleanup-preferences.json').read_text()) if support else {}
+    except (OSError, ValueError):
+        return []
+    return clean_rules(data.get('rules')) if isinstance(data, dict) else []
 
 from cloud_client import CloudUnavailable
 
@@ -74,26 +92,32 @@ def fallback_layout(text):
 class Editor:
     remote, remote_timeout = None, 8.0
 
-    def __init__(self, model_path, emit=lambda value: None, mode='edits'):
+    def __init__(self, model_path, emit=lambda value: None, mode='edits', preferences=()):
         import mlx.core as mx
         from mlx_lm import load
         self.mx, self.emit, self.mode = mx, emit, mode
         self.model, self.tokenizer = load(model_path, tokenizer_config={"trust_remote_code": False})
+        self.set_preferences(preferences)
+
+    def set_preferences(self, preferences):
+        """Build the system prompts and their warmed caches for these user preferences."""
+        self.preferences = list(preferences)
+        mode = self.mode
         prompt_file = 'edit-plan.txt' if mode == 'edits' else 'cleanup.txt'
         example_file = 'edit-plan-examples.json' if mode == 'edits' else 'examples.json'
-        self.base = [{"role": "system", "content": prompt(prompt_file)}]
+        self.base = [{"role": "system", "content": prompt(prompt_file, self.preferences)}]
         examples = json.loads((ROOT / 'prompts' / example_file).read_text())
         # Keep positive and negative examples; avoid nine competing mini-dialogues
         # that the small model can accidentally continue instead of editing the input.
         self.base += sum((examples[i:i+2] for i in (0,8,12,14)), []) if mode == 'edits' else examples
         self.prefix, self.cache = self.prepare_prefix(self.base)
         from filler_selection import PROMPT
-        self.filler_base = [{'role':'system','content':PROMPT}]
+        self.filler_base = [{'role':'system','content':with_preferences(PROMPT, self.preferences)}]
         self.filler_prefix, self.filler_cache = self.prepare_prefix(self.filler_base)
         # Isolate the new discourse operation from the established edit prompt.
         # Both caches share the same weights and are warmed at startup, not on stop.
         if mode == 'edits':
-            self.restart_base = [{"role":"system","content":prompt('restart-plan.txt')}]
+            self.restart_base = [{"role":"system","content":prompt('restart-plan.txt', self.preferences)}]
             self.restart_base += json.loads((ROOT / 'prompts' / 'restart-plan-examples.json').read_text())
             self.restart_prefix, self.restart_cache = self.prepare_prefix(self.restart_base)
 
@@ -176,10 +200,6 @@ class Editor:
         hints=spelling_hints(raw,context)
         if hints:
             tail += "原稿/背景中存在的近音写法（不是替换命令；同一对象才统一，否则保留不同含义）："+json.dumps(hints,ensure_ascii=False)+"\n"
-        from vocabulary import cleanup_guards
-        guards = cleanup_guards(raw, context)
-        if guards:
-            tail += "用户曾撤销过的整理（保持左边写法，不要改成右边）：" + json.dumps(guards, ensure_ascii=False) + "\n"
         tail += "排版：" + ("允许适度分段" if context.get('layout_policy')=='paragraphs' else "连续段落") + "\n"
         if self.mode == 'edits':
             from edits import split_units, restart_candidates, repetition_candidates
@@ -348,7 +368,7 @@ class Engine:
         recommended = mx.device_info()['max_recommended_working_set_size']
         mx.set_wired_limit(min(int(config.get('residentGiB', 5) * 2**30), recommended))
         self.asr = load_model(config["asrModel"])
-        self.editor = Editor(config["cleanupModel"], emit)
+        self.editor = Editor(config["cleanupModel"], emit, preferences=load_preferences(config.get("supportPath")))
         self.reset({})
         self.asr.generate(np.zeros(16000, dtype=np.float32), temperature=0, max_tokens=16)
         self.editor.edit('你好。', {}, timeout=10)

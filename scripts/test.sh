@@ -25,6 +25,7 @@ native_test InputIdentityTests native/Input.swift native/Audio.swift
 native_test HistoryTests native/History.swift
 native_test VocabularyTests native/Vocabulary.swift
 native_test CorrectionsTests native/Corrections.swift native/Vocabulary.swift native/Input.swift native/Audio.swift
+native_test CleanupFeedbackTests native/CleanupFeedback.swift native/Input.swift native/Audio.swift
 native_test SetupMigrationTests native/ModelSetup.swift
 native_test SetupProcessTests native/ModelSetup.swift
 native_test PermissionTests native/Permissions.swift
