@@ -60,6 +60,14 @@ class EditingTests(unittest.TestCase):
         self.assertEqual(guard_edit('上限90秒，预算15分钟','上限90秒，预算50分钟'),'number_change')
         self.assertEqual(guard_edit('我觉得可能能完成','可能能完成'),'qualifier_removed')
 
+    def test_chinese_numbers_are_compared_by_value(self):
+        for raw, edited in [('九点开会','十点开会'), ('买十二个','买二十个'), ('预算三万元','预算三十万元')]:
+            with self.subTest(raw=raw):
+                self.assertEqual(guard_edit(raw, edited), 'number_change')
+        for raw, edited in [('三点开会','3点开会'), ('一心一意做完','一心一意地做完'), ('十几个人参加','十几个人参加了')]:
+            with self.subTest(raw=raw):
+                self.assertIsNone(guard_edit(raw, edited))
+
     def test_context_is_bounded_and_grounded(self):
         ctx=normalize_context({'initial':'Typeless 与 Qwen3-ASR，'+'中'*800,'latest':'API 和 LocalVoice。'})
         self.assertEqual(len(ctx['initial']),500)

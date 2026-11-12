@@ -176,5 +176,52 @@ class StoreRobustnessTests(unittest.TestCase):
         self.assertEqual([r['id'] for r in self.store.list()], [other])
 
 
+class MarkdownSafetyTests(unittest.TestCase):
+    """Untrusted text must render as literal text in every .md the bundle writes."""
+
+    HOSTILE = '一切正常。\n\n# 伪造的一级标题\n- [x] 已批准 [点我](https://evil.example/phish)\n<img src=x onerror=alert(1)>\n---\n> 冒充引用\n1. 冒充列表'
+
+    def structure(self, markdown, allowed_headings):
+        lines = markdown.splitlines()
+        headings = [l for l in lines if l.startswith('#')]
+        return {
+            'headings': [h for h in headings if h not in allowed_headings],
+            'links': '](' in markdown,
+            'html': '<img' in markdown,
+            'rules': any(l.strip() == '---' for l in lines),
+            'quotes': any(l.startswith('>') and '冒充' in l for l in lines),
+            'lists': any(l.startswith(('- [', '1. ')) for l in lines),
+        }
+
+    def assert_literal(self, markdown, allowed_headings):
+        found = self.structure(markdown, allowed_headings)
+        self.assertEqual(found, {'headings': [], 'links': False, 'html': False, 'rules': False, 'quotes': False, 'lists': False}, markdown)
+
+    def test_deep_writing_cannot_inject_structure(self):
+        from meeting_deep import render_deep
+        with tempfile.TemporaryDirectory() as d:
+            render_deep(Path(d), {'sections': [{'heading': '## 冒充章节', 'body': self.HOSTILE, 'fact_ids': ['f1'],
+                                                'evidence': [{'segment_id': 's000001', 'quote': 'q'}]}]})
+            self.assert_literal((Path(d) / 'deep.md').read_text(), {'# 深度整理与写作', '## \\#\\# 冒充章节'})
+
+    def test_transcript_minutes_and_agent_context_cannot_inject_structure(self):
+        from meeting_store import render_bundle, render_transcript
+        with tempfile.TemporaryDirectory() as d:
+            store = MeetingStore(Path(d)); mid = store.create('会议 # 标题')['id']
+            for row in validate_segments([dict(start=0, end=4, text=self.HOSTILE)]):
+                store.append_segment(mid, row)
+            render_transcript(store, mid)
+            segment = store.segments(mid)[0]
+            minutes = {'facts': [dict(id='f000001', kind='action', topic='x', text=self.HOSTILE, owner='# 小王', due='[周四](x)',
+                                      evidence=[{'segment_id': segment['id'], 'quote': segment['text']}])], 'warnings': ['# 注意']}
+            render_bundle(store, mid, minutes, {'id': 'root', 'title': 't', 'fact_ids': ['f000001'], 'children': []})
+            directory = store.directory(mid)
+            transcript = (directory / 'transcript.md').read_text()
+            self.assert_literal(transcript, {l for l in transcript.splitlines() if l.startswith(('# 会议 \\# 标题', '## s000001'))})
+            minutes_md = (directory / 'minutes.md').read_text()
+            self.assert_literal(minutes_md, {'# 会议 \\# 标题', '## 行动项', '## 需要复核'})
+            self.assertIn('# Agent context: 会议 \\# 标题', (directory / 'agent-context.md').read_text())
+
+
 if __name__ == '__main__':
     unittest.main()

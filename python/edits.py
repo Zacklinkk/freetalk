@@ -434,21 +434,37 @@ def validate_restart(raw, units, item, patches):
         if ids!=list(range(ids[0],ids[-1]+1)):return None,'noncontiguous_restart'
     if drop[-1]+1!=keep[0]:return None,'nonadjacent_restart'
     marker=RESTART_HEAD.match(units[drop[-1]])
+    inline=False
+    if not marker:
+        # "周一部署。算了，周三部署，因为周二要冻结代码。" — the cue opens the
+        # restatement itself. Drop the withdrawn sentence(s) and only the cue
+        # words; everything said after the cue is kept verbatim.
+        marker=RESTART_HEAD.match(units[keep[0]])
+        inline=bool(marker) and bool(core(units[keep[0]][marker.end():]))
+        if not inline:marker=None
     if not marker or not isinstance(cue,str) or not core(cue) or cue not in marker[0]:return None,'missing_restart_cue'
-    start=sum(map(len,units[:drop[0]]));end=sum(map(len,units[:keep[0]]))
-    kept=''.join(units[i] for i in keep)
+    start=sum(map(len,units[:drop[0]]))
+    end=sum(map(len,units[:keep[0]]))+(marker.end() if inline else 0)
+    kept=''.join(units[i] for i in keep)[marker.end() if inline else 0:]
     if end-start>500 or len(core(kept))<6:return None,'restart_scope'
     if protected_span(raw,start,end):return None,'literal_span'
     if any(start<r and end>l for l,r,_ in patches):return None,'overlap'
-    payload=units[drop[-1]][marker.end():].strip(' \t\r\n。！？!?；;')
-    earlier=''.join(units[i] for i in drop[:-1])
+    payload='' if inline else units[drop[-1]][marker.end():].strip(' \t\r\n。！？!?；;')
+    earlier=''.join(units[i] for i in (drop if inline else drop[:-1]))
     # A redundant transition must refer to the same task as the final wording.
     def shared_content(a,b):
         matches=difflib.SequenceMatcher(a=a,b=b,autojunk=False).get_matching_blocks()
         content=[m.size for m in matches if m.size>=2 and a[m.a:m.a+m.size] not in {'我觉得','你先看','你看一下','我们先','重新说','重说','重说一遍','你先','我们','一下','一遍'}]
         return bool(content and (max(content)>=3 or sum(content)>=4))
     evidence,remaining=core(payload or earlier),core(kept)
-    if not (shared_content(evidence,remaining) or shared_content(evidence.replace('重新','重'),remaining.replace('重新','重'))):return None,'unrelated_restart'
+    def short_overlap(a,b):
+        # A short withdrawn sentence ("周一部署", "只测试中文") rarely shares three
+        # characters with its replacement, but shares its predicate ("部署", "测试").
+        if not 2<=len(a)<=12:return False
+        blocks=[m.size for m in difflib.SequenceMatcher(a=a,b=b,autojunk=False).get_matching_blocks() if m.size>=2]
+        return bool(blocks) and sum(blocks)/len(a)>=0.4
+    if not (shared_content(evidence,remaining) or shared_content(evidence.replace('重新','重'),remaining.replace('重新','重'))
+            or (inline and short_overlap(evidence,remaining))):return None,'unrelated_restart'
     # Keep new reasons/constraints in the transition. A withdrawal is not
     # permission to summarize away a budget, condition or independent instruction.
     details=r'^(?:因为|由于|为了|如果|除非|只有|只要|预算|上限|下限|至少|最多|不要|不能|禁止|必须|记得|保留|包含|还要|另外|同时|但是|不过|而且|并且)'
@@ -466,11 +482,15 @@ def validate_restart(raw, units, item, patches):
 def restart_candidates(raw):
     """Supply source-checked ids to the small model; it still decides intent."""
     units=split_units(raw); result=[]
-    for i,unit in enumerate(units[:-1]):
+    for i,unit in enumerate(units):
         marker=RESTART_HEAD.match(unit)
         if i==0 or not marker:continue
-        item={'drop':[i-1,i],'keep':[i+1],'cue':marker[0].strip(' \t\r\n，,。')}
-        if validate_restart(raw,units,item,[])[0] is not None:result.append(item)
+        cue=marker[0].strip(' \t\r\n，,。')
+        # A bare "算了，重新说。" before the restatement, or a cue that opens it.
+        shapes=[{'drop':[i-1,i],'keep':[i+1],'cue':cue}] if i+1<len(units) else []
+        shapes.append({'drop':[i-1],'keep':[i],'cue':cue})
+        for item in shapes:
+            if validate_restart(raw,units,item,[])[0] is not None:result.append(item);break
     return result[:3]
 
 def apply_plan(raw, plan, context):
