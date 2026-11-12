@@ -147,12 +147,14 @@ final class RecordingHUD: NSObject {
         spectrum.active=recording; spectrum.level=level
         action.isEnabled=recording
     }
-    func finish(success:Bool,message:String) {
+    func finish(success:Bool,message:String,notice:String?=nil) {
         hideTimer?.invalidate(); finished=true; actionMode = .copy
         resetWarning()
-        title.stringValue=success ? "已输入" : "结果已保留"; clock.stringValue=""
-        spectrum.isHidden=true; icon.isHidden=false; icon.image=NSImage(systemSymbolName:success ? "checkmark.circle.fill" : "doc.on.clipboard",accessibilityDescription:nil)
-        destination.stringValue=message; destination.toolTip=message
+        title.stringValue=success ? (notice == nil ? "已输入" : "已输入 · 本地整理") : "结果已保留"; clock.stringValue=""
+        spectrum.isHidden=true; icon.isHidden=false
+        icon.image=NSImage(systemSymbolName:notice != nil ? "exclamationmark.icloud" : success ? "checkmark.circle.fill" : "doc.on.clipboard",accessibilityDescription:notice)
+        let detail = notice.map { "\($0)" } ?? message
+        destination.stringValue=detail; destination.toolTip=notice.map { "\($0)\n\(message)" } ?? message
         action.title=""; action.image=NSImage(systemSymbolName:"doc.on.doc",accessibilityDescription:"复制结果"); action.setAccessibilityLabel("复制结果"); action.isEnabled=true
         scheduleHide()
     }
