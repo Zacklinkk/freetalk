@@ -218,9 +218,21 @@ def repair_false_stops(text):
         start = m.start()+len(m['left']); end = m.start('right')
         if not protected_span(text,m.start(),m.end()) and not re.search(r'说的是|意思是',m['left']):
             patches.append((start,end,''))
-    for m in re.finditer(r'(^|[。！？!?\n])(?P<bridge>但是|然而|不过|因此|所以|另外|以及)[。](?=\S)',text):
+    for m in re.finditer(r'(^|[。！？!?\n])(?P<bridge>但是|然而|不过|因此|所以|另外|以及|或者|或是|而且|并且|比如说|比如|例如|也就是说|就是说|此外)[。](?=\S)',text):
         a=m.end()-1
         if not protected_span(text,m.start(),m.end()):patches.append((a,a+1,'，'))
+    # Dictation is transcribed in pause-delimited pieces and the recognizer
+    # closes every piece with a terminal mark, even one cut mid-sentence. A
+    # sentence-final particle said after the pause is then stranded:
+    # 效果会更好。的 → 效果会更好的。 These particles never begin a sentence.
+    for m in re.finditer(r'(?P<mark>[。！？!?])\s*(?P<particle>[的了吧呢吗嘛啦么])(?P<after>[。！？!?，,；;]|$)',text):
+        if protected_span(text,m.start(),m.end()) or any(m.start()<r and m.end()>l for l,r,_ in patches):continue
+        particle,after=m['particle'],m['after']
+        if after in ('，',',','；',';'):
+            patches.append((m.start(),m.end('particle'),particle));continue
+        mark=after if after in ('？','?','！','!') else m['mark']
+        if particle in '吗么' and mark=='。':mark='？'
+        patches.append((m.start(),m.end(),particle+mark))
     return replace_spans(text,patches), len(patches)
 
 def preclean(raw, context=None):
