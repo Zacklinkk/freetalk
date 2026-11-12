@@ -205,7 +205,10 @@ def expand_references(candidate, refs):
         by_segment.setdefault(uid.rsplit('_u', 1)[0], uid)
     result = []
     for fact in candidate['facts']:
-        if not isinstance(fact, dict): continue
+        # Pass a malformed row through so the validator counts it as rejected;
+        # skipping it here made it disappear without a warning.
+        if not isinstance(fact, dict):
+            result.append(fact); continue
         ids = fact.get('refs')
         # Unknown references deliberately produce invalid evidence for the validator.
         evidence = [refs.get(uid) or refs.get(by_segment.get(uid, ''), {}) if isinstance(uid, str) else {}
