@@ -31,7 +31,39 @@ CHECKS = {
 }
 
 
-def metrics(minutes, tree, segments):
+def core(text):
+    return re.sub(r'[\W_]', '', text)
+
+
+def fixture_checks(minutes, segments, sample):
+    """Use the fixture's own required/forbidden lists, which were never read.
+
+    Recall: each required fact appears in some extracted fact. Forbidden: a
+    claim counts only when it is asserted (not inside a quoted/test record).
+    Source coverage: share of non-blank segments any fact cites.
+    """
+    facts = minutes['facts']
+    # Facts render verbatim quotes, so recall is checked against quotable anchors
+    # (`required_quotes`), not the human-readable summaries in `required_facts`.
+    required = (sample or {}).get('required_quotes', [])
+    forbidden = (sample or {}).get('forbidden_assertions', [])
+    hit = [r for r in required if any(core(r) in core(f['text']) for f in facts)]
+    # A withdrawn value inside a question, or a quoted test command, is not an
+    # assertion; only decisions, actions and constraints assert something.
+    asserted = [f for f in facts if f['kind'] in ('decision', 'action', 'constraint')]
+    leaked = [c for c in forbidden if any(core(c) in core(f['text']) for f in asserted)]
+    covered = {e['segment_id'] for f in facts for e in f['evidence']}
+    nonblank = [s['id'] for s in segments if s['text'].strip()]
+    texts = [core(f['text']) for f in facts]
+    return {'required_fact_recall': len(hit) / max(1, len(required)),
+            'missing_required_facts': [r for r in required if r not in hit],
+            'forbidden_claim_count': len(leaked), 'forbidden_claims_found': leaked,
+            'source_coverage': len([s for s in nonblank if s in covered]) / max(1, len(nonblank)),
+            'duplicate_fact_texts': len(texts) - len(set(texts)),
+            'actions_with_owner': sum(1 for f in facts if f['kind'] == 'action' and f.get('owner'))}
+
+
+def metrics(minutes, tree, segments, sample=None):
     text = '\n'.join(f['text'] for f in minutes['facts'])
     by_id = {s['id']: s for s in segments}
     refs = [e for f in minutes['facts'] for e in f['evidence']]
@@ -54,7 +86,9 @@ def metrics(minutes, tree, segments):
                 'quoted_command_not_action': not any(f['kind']=='action' and '删除' in f['text'] and '日志' in f['text'] for f in minutes['facts']),
                 'no_extractive_fallback': not any(f.get('topic')=='待整理原文' for f in minutes['facts']),
             },
-            'sample_checks': {key: bool(re.search(pattern, text)) for key, pattern in CHECKS.items()},
+            'sample_checks': {key: bool(re.search(pattern, text)) for key, pattern in CHECKS.items()} if sample is None or sample.get('use_regex_checks', True) else {},
+            'fixture_checks': fixture_checks(minutes, segments, sample),
+            # Diagnostic only: an honest fallback warning is not a quality defect.
             'warning_count': len(minutes['warnings']),
             'note': 'Synthetic regression checks only; regex coverage is not a semantic accuracy score or real-meeting benchmark.'}
 
@@ -84,7 +118,7 @@ def main():
     start = time.monotonic()
     minutes, tree = summarize(segments,generate,title=sample.get('title','合成会议'))
     result = {'model':model_name,'provider':args.provider,'seconds':round(time.monotonic()-start,3),
-              'synthetic':True,'human_verified_ground_truth':False,'metrics':metrics(minutes,tree,segments),'minutes':minutes,'mindmap':tree}
+              'synthetic':True,'human_verified_ground_truth':False,'metrics':metrics(minutes,tree,segments,sample),'minutes':minutes,'mindmap':tree}
     args.out.parent.mkdir(parents=True,exist_ok=True)
     args.out.write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
     print(json.dumps({k:result[k] for k in ('model','seconds','metrics')},ensure_ascii=False,indent=2))

@@ -70,7 +70,7 @@ class MeetingStore:
 
     def manifest(self, meeting_id):
         data = json.loads((self.directory(meeting_id) / 'manifest.json').read_text())
-        if data.get('schema') != SCHEMA or data.get('id') != meeting_id:
+        if not isinstance(data, dict) or data.get('schema') != SCHEMA or data.get('id') != meeting_id:
             raise ValueError('Unsupported meeting manifest')
         return data
 
@@ -96,8 +96,16 @@ class MeetingStore:
             return []
         rows = []
         for line in path.read_text().splitlines():
-            if line.strip():
-                rows.append(json.loads(line))
+            if not line.strip():
+                continue
+            # One damaged line (an interrupted write, a manual edit) must not make
+            # the whole meeting unreadable; skip it and keep the rest.
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and isinstance(row.get('text'), str):
+                rows.append(row)
         return rows
 
     def append_segment(self, meeting_id, row):
@@ -121,8 +129,9 @@ class MeetingStore:
         self.manifest(meeting_id)
         destination = Path(destination).expanduser() / ('freetalk-' + meeting_id)
         destination.mkdir(parents=True, exist_ok=False, mode=0o700)
+        has_deep = self.read(meeting_id).get('deep') is not None
         for name in EXPORT_FILES:
-            if name.startswith('deep.') and self.read(meeting_id).get('deep') is None:
+            if name.startswith('deep.') and not has_deep:
                 continue
             source = self.directory(meeting_id) / name
             if source.is_file() and not source.is_symlink():

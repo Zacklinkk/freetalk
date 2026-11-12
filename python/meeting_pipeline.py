@@ -67,7 +67,7 @@ def overlap_duration(turns):
 def validate_segments(rows):
     if not isinstance(rows, list) or len(rows) > 100000:
         raise ValueError('转写须为片段数组，最多 100000 个片段')
-    result, seen = [], set()
+    result = []
     last_start = -1
     for i, r in enumerate(rows):
         if not isinstance(r, dict) or not isinstance(r.get('text'), str) or len(r['text']) > 5000:
@@ -116,7 +116,6 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
     started = time.monotonic(); timings = {}
     audio_path = directory / 'audio.wav'
     retain = bool(settings.get('retain_audio', False))
-    summary_mode = settings.get('summary_mode', 'local')
     try:
         # Basic minutes always remain local. Cloud writing is a separate derived layer.
         if engine is None:
@@ -127,8 +126,12 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
             generate = local_generator(engine.editor.model, engine.editor.tokenizer)
         summary_model = Path(config['cleanupModel']).name
         timings['summary_model_setup_seconds'] = round(time.monotonic()-started,3)
+        from meeting_deep import configured as deep_configured
+        # Basic minutes are always local; record the optional cloud layer separately.
         store.update(meeting_id, status='processing', stage='preparing', error=None,
                      summary_provider='local', summary_model=summary_model,
+                     deep_provider='cloud' if deep_configured(settings) else 'none',
+                     deep_model=settings.get('model') if deep_configured(settings) else None,
                      requested_audio_retention=retain)
         if payload.get('transcript_path'):
             progress(stage='import', message='导入带时间戳的转写')
@@ -220,13 +223,14 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
         timings['summary_and_mindmap_seconds'] = round(time.monotonic()-stage_start,3)
         if not segments:
             minutes['warnings'].append('未得到有效语音转写；请检查录音内容和输入设备。')
+        minutes['warnings'] = list(dict.fromkeys(minutes['warnings']))
         if any(s.get('speaker_status') in {'multiple_or_overlap','multiple_speakers','overlap'} for s in segments):
             minutes['warnings'].append('部分片段包含多个说话人或重叠，未把每个词强行分配给某个人。')
         source_digest = render_bundle(store, meeting_id, minutes, tree)
         # A cloud failure must not discard or mark the usable local bundle as failed.
         from meeting_deep import configured, deepen, render_deep
         deep_status = 'not_configured'
-        if configured(settings):
+        if configured(settings) and minutes['facts']:
             progress(stage='deep', message='基础纪要已完成，开始可选的云端深度整理')
             store.update(meeting_id, stage='deep', deep_status='processing')
             stage_start = time.monotonic()
@@ -241,7 +245,8 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
                 deep_status = 'failed'
                 store.update(meeting_id, deep_error='云端深度整理未完成。请检查连接、模型和密钥；本地基础资料不受影响。')
                 minutes['warnings'].append('云端深度整理未完成，本地基础资料已保存。')
-                render_bundle(store, meeting_id, minutes, tree)
+                # Re-render once so the bundle shows the warning; nothing else changed.
+                source_digest = render_bundle(store, meeting_id, minutes, tree)
             timings['deep_seconds'] = round(time.monotonic()-stage_start,3)
         store.update(meeting_id, deep_status=deep_status)
         if audio_path.exists() and not retain:
@@ -251,12 +256,18 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
                      processing_seconds=round(time.monotonic()-started,3), timings=timings)
         progress(stage='complete', completed=1, total=1, message='会议资料已生成')
         return {'meeting_id': meeting_id, 'directory': str(directory), 'segments': len(segments), 'facts': len(minutes['facts'])}
-    except Exception as exc:
-        # No API key, prompt or remote response body in failure records.
-        message = str(exc)[:400]
+    except BaseException as exc:
+        # No API key, prompt or remote response body in failure records. Also
+        # covers interrupts (KeyboardInterrupt, SystemExit), which used to leave
+        # the manifest stuck at status=processing forever.
+        message = str(exc)[:400] if isinstance(exc, Exception) else '处理被中断，可以选择“继续处理”。'
         if payload.get('api_key'):
             message = message.replace(payload['api_key'], '[redacted]')
-        store.update(meeting_id, status='failed', error=message, audio_retained=audio_path.exists())
+        try:
+            store.update(meeting_id, status='failed', error=message, audio_retained=audio_path.exists(),
+                         **({'deep_status': 'failed'} if store.manifest(meeting_id).get('deep_status') == 'processing' else {}))
+        except Exception:
+            pass
         raise
     finally:
         fcntl.flock(lock, fcntl.LOCK_UN); lock.close()
