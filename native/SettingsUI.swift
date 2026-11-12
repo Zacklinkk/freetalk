@@ -95,7 +95,7 @@ extension AppDelegate {
         ])
         permissionsLabel = label("",size:11,color:.secondaryLabelColor)
         let permissionCard = card("系统权限与输入兼容性", views: [permissionsLabel,row([button("逐项授权引导",#selector(showPermissionGuide)),button("麦克风",#selector(requestMic)),button("辅助功能",#selector(requestAX)),button("输入监控",#selector(requestKeys))]),button("5秒后测试输入",#selector(testInsertion)),label("切回目标输入框，将插入“freetalk 输入测试”，不会发送。",size:12,color:.secondaryLabelColor)])
-        addSettingsPage(settingsPage("语音输入", subtitle: "说完即写入当前光标位置，保持你的表达。", cards:[statusCard,limitCard,micCard,shortcutCard,cleanupCard,permissionCard],scrollable:true))
+        addSettingsPage(settingsPage("语音输入", subtitle: "说完即写入当前光标位置，保持你的表达。", cards:[statusCard,limitCard,micCard,shortcutCard,cleanupCard,cloudEditor.makeCard(),permissionCard],scrollable:true))
 
         resultView = NSTextView(); resultView.isEditable = false; resultView.isSelectable = true; resultView.isRichText = false
         resultView.font = .systemFont(ofSize:15); resultView.textContainerInset = NSSize(width:16,height:16)

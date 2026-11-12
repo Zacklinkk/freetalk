@@ -23,7 +23,14 @@ def main():
                 engine.reset(normalize_context(command.get("context", {})))
                 policy = command.get("cleanup_policy", "auto")
                 engine.cleanup_policy = policy if policy in {"auto", "always", "fast"} else "auto"
+                engine.configure_cloud(command.get("cloud"))
                 result = {"ready": True}
+            elif action == "cloud_test":
+                from cloud_client import chat_client, probe
+                settings = command.get("cloud") or {}
+                client = chat_client(settings.get("protocol", "openai"), settings.get("base_url", ""),
+                                     settings.get("model", ""), settings.get("api_key", ""), settings.get("headers"))
+                result = {"seconds": round(probe(client, min(20, max(2, float(settings.get("timeout_seconds", 10))))), 2)}
             elif action == "chunk":
                 result = engine.push(base64.b64decode(command["pcm"], validate=True))
             elif action == "finish":

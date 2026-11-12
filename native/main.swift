@@ -68,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var shortcutTestLabel: NSTextField!
     let hotkeyRecorder = HotkeyRecorder()
     let hotkeyTester = HotkeyTestController()
+    lazy var cloudEditor = CloudEditorPanel(app: self)
     var lastHotkeyAttempt = Date.distantPast
     var deviceList: [MicDevice] = []
     var target: InputSnapshot?
@@ -575,7 +576,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         context["layout_policy"] = layoutPicker.indexOfSelectedItem == 1 ? "paragraphs" : "minimal"
         setStatus("正在打开麦克风…")
         let policy = ["auto", "always", "fast"][cleanupPicker.indexOfSelectedItem]
-        worker.request("begin", ["context": context, "cleanup_policy": policy]) { response in
+        var begin: [String: Any] = ["context": context, "cleanup_policy": policy]
+        // Fast-only mode never reaches a model; keep the cloud out of it entirely.
+        if policy != "fast", let cloud = CloudEditorSettings.load().payload() { begin["cloud"] = cloud }
+        worker.request("begin", begin) { response in
             guard self.session == token, self.phase == .preparing else { return }
             switch response {
             case .failure(let error): self.phase = .idle; self.hudTimer?.invalidate(); self.hud.finish(success: false, message: error.localizedDescription); self.setStatus(error.localizedDescription)
@@ -684,7 +688,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         guard self.session == token else { return }
                         self.phase = .idle; self.hudTimer?.invalidate()
                         self.currentEntry?.insertionStatus = message; self.saveResult()
-                        self.hud.finish(success: success, message: message); self.setStatus(message)
+                        // The user chose the cloud; say so when this result came from the local model instead.
+                        let notice = (cleanup["cloud_fallback"] as? String).map { "\(CloudEditorSettings.describe(fallback: $0))，已改用本地模型整理" }
+                        self.hud.finish(success: success, message: message, notice: notice)
+                        self.setStatus(notice.map { "\(message) · \($0)" } ?? message)
                         if success, self.learningButton.state == .on, let target = self.target {
                             self.correctionLearner.start(target:target,inserted:self.lastText,store:self.correctionStore)
                         }
