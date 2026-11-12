@@ -37,7 +37,7 @@ final class CloudEditorPanel: NSObject {
 
     func refresh() {
         let settings = CloudEditorSettings.load()
-        let ready = settings.payload() != nil
+        let ready = settings.configured
         if settings.enabled && !ready { status.stringValue = "已开启但配置不完整：请填写地址、模型和 API Key 后保存。当前使用本地模型。" }
         else if !settings.enabled { status.stringValue = "当前使用本地模型。" }
         else if status.stringValue.isEmpty || status.stringValue.hasPrefix("当前") || status.stringValue.hasPrefix("已开启") {
@@ -60,7 +60,7 @@ final class CloudEditorPanel: NSObject {
             var s = try readForm()
             let headerText = try CloudEditorSettings.validated(headers: headers.stringValue)
             if !key.stringValue.isEmpty { try CloudEditorSettings.setSecret(key.stringValue, account: s.baseURL); key.stringValue = "" }
-            guard !(CloudEditorSettings.secret(s.baseURL) ?? "").isEmpty else { throw VoiceError.message("请输入 API Key 后保存") }
+            guard CloudEditorSettings.hasSecret(s.baseURL) else { throw VoiceError.message("请输入 API Key 后保存") }
             if !headers.stringValue.isEmpty { try CloudEditorSettings.setSecret(headerText, account: s.baseURL + "#headers"); headers.stringValue = "" }
             s.enabled = enable.state == .on
             s.save()

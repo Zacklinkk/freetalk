@@ -62,6 +62,18 @@ struct CloudEditorSettings {
         return value
     }
 
+    /// Whether a secret is stored, without reading it. Reading the value can
+    /// show a Keychain approval dialog; checking attributes never does, so the
+    /// settings page uses this and never blocks the main thread on a prompt.
+    static func hasSecret(_ account: String) -> Bool {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+            kSecAttrAccount as String: account, kSecReturnAttributes as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
+
+    /// Complete enough to try: switched on, endpoint, model and a stored key.
+    var configured: Bool { enabled && !baseURL.isEmpty && !model.isEmpty && Self.hasSecret(baseURL) }
+
     static func secret(_ account: String) -> String? {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
             kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
