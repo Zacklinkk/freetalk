@@ -132,7 +132,7 @@ extension AppDelegate {
         modelLabel = label(modelText,color:.secondaryLabelColor)
         let downloads = ModelDownloadView(app:self); modelSetupView = downloads
         addSettingsPage(settingsPage("本地模型",subtitle:"下载、校验和运行，都可以在这里完成。",cards:[downloads,
-            card("运行状态",views:[modelLabel,row([button("重新加载模型",#selector(reloadModel)),button("打开本地文件夹",#selector(openModelStorage)),button("首次使用引导…",#selector(showOnboarding))]),label("模型常驻内存预算上限5 GiB，与磁盘大小不同。建议16 GB内存。\n音频不保存，转写历史和个人词库仅在本机。",size:12,color:.secondaryLabelColor)])],scrollable:true))
+            card("运行状态",views:[modelLabel,row([button("重新加载模型",#selector(reloadModel)),button("打开本地文件夹",#selector(openModelStorage)),button("首次使用引导…",#selector(showOnboarding))]),label("模型常驻内存约 3.7 GiB（用 1.7B 识别约 5.1 GiB），与磁盘大小不同。建议16 GB内存。\n音频不保存，转写历史和个人词库仅在本机。",size:12,color:.secondaryLabelColor)])],scrollable:true))
         let updates = AppUpdateView(app:self); appUpdateView = updates
         addSettingsPage(settingsPage("软件更新",subtitle:"有新版时在这里提醒，由你决定何时更新。",cards:[updates]))
         let meeting = MeetingView(app:self); meetingView = meeting

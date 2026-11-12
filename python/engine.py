@@ -366,13 +366,19 @@ class Engine:
         # MLX defaults to 0 resident bytes between requests. A bounded resident
         # budget prevents idle model pages from being repeatedly swapped in.
         recommended = mx.device_info()['max_recommended_working_set_size']
-        mx.set_wired_limit(min(int(config.get('residentGiB', 5) * 2**30), recommended))
+        budget = min(int(config.get('residentGiB', 5) * 2**30), recommended)
+        mx.set_wired_limit(budget)
         self.asr = load_model(config["asrModel"])
         self.editor = Editor(config["cleanupModel"], emit, preferences=load_preferences(config.get("supportPath")))
         self.reset({})
         self.asr.generate(np.zeros(16000, dtype=np.float32), temperature=0, max_tokens=16)
         self.editor.edit('你好。', {}, timeout=10)
         mx.synchronize()
+        # Qwen3-ASR-1.7B with the 4B editor holds about 5.1 GiB, above the
+        # 5 GiB default; pages outside the limit would be reloaded after idle.
+        self.resident_bytes = min(max(budget, int(mx.get_active_memory() * 1.1)), recommended)
+        if self.resident_bytes > budget:
+            mx.set_wired_limit(self.resident_bytes)
 
     def configure_cloud(self, settings):
         """Apply per-utterance cloud settings. A bad configuration degrades to local."""
