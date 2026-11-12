@@ -140,6 +140,6 @@ def probe(client, timeout=10):
     """A tiny round trip for the settings page: proves endpoint, key and model."""
     started = time.perf_counter()
     reply = client([{'role': 'system', 'content': '只返回 JSON。'},
-                    {'role': 'user', 'content': '返回 {"ok":true}'}], 32, timeout)
+                    {'role': 'user', 'content': '返回 {"ok":true}'}], 512, timeout)
     json_object(reply)
     return time.perf_counter() - started

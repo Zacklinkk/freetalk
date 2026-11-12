@@ -205,9 +205,3 @@ def spelling_hints(raw, context):
         pairs.append([heard_word,term]); seen.add(key)
         if len(pairs)>=8: break
     return pairs
-
-
-def cleanup_guards(raw, context):
-    """Rewrites the editor made before and the user reverted, still relevant here."""
-    return [[r['term'], r['heard']] for r in context.get('personal_aliases', [])
-            if r.get('stage') == 'cleanup' and r['term'] in raw][:8]

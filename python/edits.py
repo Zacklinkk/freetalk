@@ -174,19 +174,6 @@ def rewrites_learned_alias(raw,old,new,start,end,context):
         if term and term in outside: return True
     return False
 
-def repeats_reverted_cleanup(old,new,context):
-    """The editor once rewrote `term` into `heard` and the user changed it back.
-
-    That is a direct, user-confirmed signal that this rewrite is wrong; the
-    editor must not make it again, whichever model produced the plan.
-    """
-    a,b=core(old),core(new)
-    for row in context.get('personal_aliases',[]):
-        if row.get('stage') != 'cleanup': continue
-        heard,term=core(row['heard']),core(row['term'])
-        if heard and term and a.count(term)>b.count(term) and b.count(heard)>a.count(heard): return True
-    return False
-
 def tidy_punctuation(text):
     """Remove punctuation a deletion left without its words.
 
@@ -575,7 +562,6 @@ def apply_plan(raw, plan, context):
         if core(old)==core(new) and any(p in old and p not in new for p in '。！？!?') and repair_false_stops(old)[0] != new:reason='sentence_boundary_change'
         if not reason and protected_span(raw,start,end):reason='literal_span'
         if not reason and rewrites_learned_alias(raw,old,new,start,end,context):reason='learned_alias_requires_audio'
-        if not reason and repeats_reverted_cleanup(old,new,context):reason='reverted_by_user'
         discourse=contextual_cleanup(raw,old,new,start,edit.get('kind'))
         repetition=repetition_cleanup(raw,old,new,start)
         spelling=edit.get('kind')=='spelling' and grounded_spelling(raw,old,new,context)

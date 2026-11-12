@@ -25,6 +25,8 @@ last-result.json
 dictionary.json
 dictionary-aliases.json
 correction-suggestions.json
+cleanup-feedback.json
+cleanup-preferences.json
 last-microphone-*.json
 *.log
 .env

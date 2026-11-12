@@ -40,7 +40,7 @@ class Provider(BaseHTTPRequestHandler):
             # Newer models reject a non-default temperature.
             self.send_response(400); self.end_headers(); self.wfile.write(b'{"error":"bad request"}'); return
         text = json.dumps(PLAN, ensure_ascii=False) if mode != 'prose' else '我觉得不需要修改。'
-        if body.get('max_tokens') == 32:
+        if body.get('max_tokens') == 512:
             text = '{"ok":true}'
         reply = ({'content': [{'type': 'text', 'text': text}], 'stop_reason': 'end_turn'}
                  if self.path.endswith('/v1/messages') else
