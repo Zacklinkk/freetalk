@@ -93,20 +93,21 @@ enum CorrectionExtractor {
             }
             let latinTypo = old.allSatisfy { $0.isASCII && $0.isLetter } && new.allSatisfy { $0.isASCII && $0.isLetter } && old.count == new.count && zip(old.lowercased(),new.lowercased()).filter { $0 != $1 }.count == 1
             guard oldSound == newSound || oneSoundEdit(oldSound,newSound) || latinTypo else { return nil }
-            // Sound-alike alone cannot tell a misheard word from a deliberate
-            // rewording: 星禾→星河 (misheard) and 权利→权力 (reworded) are
-            // acoustically identical. For Chinese, require the replacement to
-            // already exist in the personal vocabulary — that is the only
-            // evidence that the speaker meant this word and the recognizer got
-            // it wrong. Latin typos (SFY→SFT) are unambiguous and stay direct.
+            // A lesson only biases recognition and hints the editor; it never
+            // replaces text by itself, and it fades unless the user repeats it.
+            // That keeps a mistaken lesson cheap, so the gate can admit a word
+            // the vocabulary has never seen. Latin typos (SFY→SFT) stay direct.
             let isChinese = old.unicodeScalars.contains { $0.value > 0x4E00 && $0.value < 0x9FFF }
             if isChinese {
-                guard terms.contains(where: { $0 == new || $0.hasPrefix(new) || new.hasPrefix($0) }) else { return nil }
-                // A mishearing keeps the sound and most of the characters. Same
-                // pinyin alone also matches deliberate rewrites (权利→权力).
-                guard oldSound == newSound, old.count == new.count else { return nil }
-                let shared = zip(old, new).filter { $0 == $1 }.count
-                guard shared >= max(1, (old.count + 1) / 2) else { return nil }
+                // An accent or a recognizer slip moves the pinyin by at most one
+                // letter: z/zh, c/ch, s/sh, n/l, an/ang (服装→浮窗, 国产→过场).
+                // The sound gate above already enforces that; the vocabulary is
+                // not required, so a new name or term can be learned on first use.
+                guard old.count == new.count else { return nil }
+                // Choosing 他/她 or 的/地/得 is grammar, not a mishearing to learn.
+                let grammar = ["他她它祂", "的地得", "在再", "做作", "那哪", "象像", "已以", "即既", "须需"]
+                let changed = zip(old, new).filter { $0 != $1 }
+                if changed.allSatisfy({ pair in grammar.contains { $0.contains(pair.0) && $0.contains(pair.1) } }) { return nil }
             }
             return (old,new)
         }

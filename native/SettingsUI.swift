@@ -119,7 +119,7 @@ extension AppDelegate {
         learningButton.state = UserDefaults.standard.object(forKey:"learnCorrections") as? Bool == false ? .off : .on
         addSettingsPage(settingsPage("常用词与学习",subtitle:"让名字、缩写和项目术语保持正确的拼写。",cards:[
             card("个人词库","每行一个词，保存你常用的写法。下一次录音起生效。",views:[button("管理常用词…",#selector(showVocabulary))]),
-            card("从改字学习","默认开启。输入后 90 秒内在同一输入框里改字，可靠的短词修正会自动学习，并显示5秒撤销提示。\n会区分是识别听错还是整理改错，分别用于语音识别和文字整理。标点、数量、否定和整段改写不学习；中文只学读音相同、多数字相同、且正确写法已在词库里的改字。重复出现会加强，长期未再出现会自动失效。",views:[learningButton,button("管理已学会的词…",#selector(showCorrections)),learningStatusLabel()]),
+            card("从改字学习","默认开启。输入后 90 秒内在同一输入框里改字，可靠的短词修正会自动学习，并显示5秒撤销提示。\n会区分是识别听错还是整理改错，分别用于语音识别和文字整理。标点、数量、否定和整段改写不学习；中文学读音相同或只差一个字母的改字（z/zh、c/ch、n/l、an/ang 这类口音差别），正确写法自动加入词库。重复出现会加强，长期未再出现会自动失效。",views:[learningButton,button("管理已学会的词…",#selector(showCorrections)),learningStatusLabel()]),
             card("使用提示",views:[label("例如：星河知识库、项目名称、SFT。\n专业词在语音识别和文字整理时都会作为辨词参考。",color:.secondaryLabelColor)])]))
 
         modelLabel = label(modelText,color:.secondaryLabelColor)
