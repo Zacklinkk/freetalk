@@ -61,4 +61,26 @@ class LayoutAliasTests(unittest.TestCase):
         plan={'repairs':[{'old':'服装','new':'浮窗','cue':'不对，我是说浮窗。'}],'edits':[],'breaks':[],'bullets':[]}
         self.assertEqual(apply_plan(raw,plan,ctx)[0],'修改浮窗。')
 
+
+    def test_asr_and_cleanup_lessons_are_used_differently(self):
+        from vocabulary import hotwords, spelling_hints, cleanup_guards
+        ctx=normalize_context({'personal_terms':['A1','A2','星河知识库','发布'],'personal_aliases':[
+            {'heard':'星禾知识库','term':'星河知识库','stage':'asr','count':3},
+            {'heard':'上线','term':'发布','stage':'cleanup','count':1}]})
+        # A recognizer mishearing earns a hotword slot ahead of unrelated vocabulary.
+        self.assertEqual(hotwords(ctx)[0],'星河知识库')
+        self.assertIn(['星禾知识库','星河知识库'],spelling_hints('打开星禾知识库。',ctx))
+        # An editor rewrite the user reverted is never a spelling hint ...
+        self.assertNotIn(['上线','发布'],spelling_hints('周三上线。',ctx))
+        # ... it is a constraint, and the same rewrite is refused.
+        self.assertEqual(cleanup_guards('周三发布。',ctx),[['发布','上线']])
+        plan={'edits':[{'old':'周三发布','new':'周三上线','kind':'spelling'}],'breaks':[],'bullets':[]}
+        text,meta=apply_plan('周三发布。',plan,ctx)
+        self.assertEqual(text,'周三发布。')
+        self.assertEqual(meta['rejected_edits'][0]['reason'],'reverted_by_user')
+
+    def test_old_alias_files_still_load(self):
+        ctx=normalize_context({'personal_terms':['星河知识库'],'personal_aliases':[{'heard':'星禾知识库','term':'星河知识库'}]})
+        self.assertEqual(ctx['personal_aliases'],[{'heard':'星禾知识库','term':'星河知识库','stage':'asr','count':1}])
+
 if __name__=='__main__':unittest.main()

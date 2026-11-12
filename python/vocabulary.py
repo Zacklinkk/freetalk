@@ -43,8 +43,21 @@ def personal_aliases(values, terms):
         # like "插画。" -> "cha hua" would otherwise enter the ASR hotword list
         # as a literal string and never match anything.
         if any(c in old+new for c in '，。！？、；：""''「」『』（）()【】[]{}…—·,.!?;:\'"') or re.search(r'\s', old+new): continue
-        if old not in seen: result.append({'heard':old,'term':new}); seen.add(old)
+        stage = row.get('stage') if row.get('stage') in ('asr', 'cleanup') else 'asr'
+        count = row.get('count') if isinstance(row.get('count'), int) and row.get('count') > 0 else 1
+        if old not in seen: result.append({'heard':old,'term':new,'stage':stage,'count':min(count,999)}); seen.add(old)
     return result
+
+
+def asr_rescue_terms(context):
+    """Terms the recognizer has misheard before, most often first.
+
+    These deserve a hotword slot even when nothing on screen mentions them:
+    that is exactly the case where the recognizer needs the bias.
+    """
+    rows = sorted((r for r in context.get('personal_aliases', []) if r.get('stage', 'asr') == 'asr'),
+                  key=lambda r: -r.get('count', 1))
+    return list(dict.fromkeys(r['term'] for r in rows))
 
 
 def normalize_aliases(raw, context):
@@ -145,6 +158,8 @@ def hotwords(context):
     ranked = sorted(((position(term), index, term) for index, term in enumerate(terms)))
     relevant = [term for at, _, term in ranked if at >= 0]
     rest = [term for at, _, term in ranked if at < 0]
+    rescue = [term for term in asr_rescue_terms(context) if term in rest]
+    rest = rescue + [term for term in rest if term not in rescue]
     return (relevant + rest)[:MAX_ACTIVE_TERMS]
 
 
@@ -181,6 +196,7 @@ def spelling_hints(raw, context):
     # it against this utterance. Without this the editor never learns that a
     # correction exists, and its own grounded spelling edit is then refused.
     for row in context.get('personal_aliases',[]):
+        if row.get('stage','asr') != 'asr': continue
         heard_word, term = row.get('heard',''), row.get('term','')
         if not heard_word or not term or heard_word not in raw: continue
         if LITERALS.search(heard_word): continue
@@ -189,3 +205,9 @@ def spelling_hints(raw, context):
         pairs.append([heard_word,term]); seen.add(key)
         if len(pairs)>=8: break
     return pairs
+
+
+def cleanup_guards(raw, context):
+    """Rewrites the editor made before and the user reverted, still relevant here."""
+    return [[r['term'], r['heard']] for r in context.get('personal_aliases', [])
+            if r.get('stage') == 'cleanup' and r['term'] in raw][:8]
