@@ -717,7 +717,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         // their value a moment later. The learner stops itself, with a
                         // recorded reason, if the field stays unreadable.
                         if self.learningButton.state == .on, let target = self.target, success || message.hasPrefix("粘贴已发送") {
-                            self.correctionLearner.start(target:target,inserted:self.lastText,raw:self.lastRaw,store:self.correctionStore)
+                            self.correctionLearner.start(target:self.inserter.lastTarget ?? target,inserted:self.lastText,raw:self.lastRaw,store:self.correctionStore)
                         }
                         self.refreshDevices()
                     }

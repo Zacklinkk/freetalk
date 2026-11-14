@@ -34,6 +34,34 @@ import Foundation
         precondition(InsertionCheck.check(original: "", inserted: "run SFT now", expected: "run SFT now", observed: "run\u{00A0}SFT\u{00A0}now") == (true, "normalized"))
         // A short insert that already existed in the field is not proof of a paste.
         precondition(!InsertionCheck.check(original: "好的好的", inserted: "好的", expected: "好的好的好的", observed: "好的好的").verified)
-        print("Input identity passed: recreated node accepted only with matching path/window/document; changed target rejected; paste verification tolerates representation differences")
+        // The caret check ignores changes elsewhere in the field but not at the caret.
+        func r(_ location: Int, _ length: Int = 0) -> CFRange { CFRange(location: location, length: length) }
+        let draft = "请帮我看一下这段代码。"                                   // caret at the end
+        let n = (draft as NSString).length
+        precondition(InsertionCheck.caretUnchanged(original: draft, range: r(n), current: draft, currentRange: r(n)))
+        // Output was added above a longer draft; the caret index moved, its surroundings did not.
+        let longDraft = "上一段已经写好的内容，保持不变。" + draft
+        let streamed = "第一轮输出……第二轮输出……\n" + longDraft
+        precondition(InsertionCheck.caretUnchanged(original: longDraft, range: r((longDraft as NSString).length), current: streamed, currentRange: r((streamed as NSString).length)))
+        // In a short field the window reaches the field start, so text added there counts.
+        precondition(!InsertionCheck.caretUnchanged(original: draft, range: r(n), current: "新" + draft, currentRange: r(n + 1)))
+        // A block-ending newline after the caret is not a change.
+        precondition(InsertionCheck.caretUnchanged(original: draft, range: r(n), current: draft + "\n", currentRange: r(n)))
+        // Text appended far after the caret.
+        let long = String(repeating: "旧", count: 40) + "|" + String(repeating: "尾", count: 40)
+        let at = 40
+        precondition(InsertionCheck.caretUnchanged(original: long, range: r(at), current: long + "新加的内容", currentRange: r(at)))
+        // Invisible characters an editor adds are not a change.
+        precondition(InsertionCheck.caretUnchanged(original: "a b", range: r(1), current: "a\u{00A0}b", currentRange: r(1)))
+        // The user typed at the caret, moved it, or the selection changed: refuse.
+        precondition(!InsertionCheck.caretUnchanged(original: draft, range: r(n), current: draft + "我又打了字", currentRange: r(n + 5)))
+        precondition(!InsertionCheck.caretUnchanged(original: draft, range: r(n), current: draft, currentRange: r(2)))
+        precondition(!InsertionCheck.caretUnchanged(original: draft, range: r(2, 3), current: draft, currentRange: r(2, 1)))
+        // An empty field that is now filled, or emptied, is a change.
+        precondition(!InsertionCheck.caretUnchanged(original: "", range: r(0), current: "别人发来的内容", currentRange: r(0)))
+        precondition(!InsertionCheck.caretUnchanged(original: draft, range: r(n), current: "", currentRange: r(0)))
+        // Out-of-range selections fail closed.
+        precondition(!InsertionCheck.caretUnchanged(original: draft, range: r(n + 1), current: draft, currentRange: r(n)))
+        print("Input identity passed: recreated node accepted only with matching path/window/document; changed target rejected; paste verification tolerates representation differences; caret check ignores changes away from the caret")
     }
 }

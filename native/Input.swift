@@ -540,7 +540,11 @@ struct InputSnapshot {
         return rect
     }
 
-    func resolve(allowBackground: Bool = false) throws -> AXUIElement {
+    func resolve(allowBackground: Bool = false) throws -> AXUIElement { try resolveState(allowBackground: allowBackground).element }
+
+    /// The focused field now, if it is still the one recording started in and
+    /// the caret is still where the user left it.
+    func resolveState(allowBackground: Bool = false) throws -> (element: AXUIElement, value: String, range: CFRange) {
         guard !IsSecureEventInputEnabled() else { throw VoiceError.message("安全输入已开启") }
         guard AXIsProcessTrusted() else { throw VoiceError.message("辅助功能权限不可用") }
         if !allowBackground && NSWorkspace.shared.frontmostApplication?.processIdentifier != pid { throw VoiceError.message("前台应用已切换") }
@@ -551,15 +555,24 @@ struct InputSnapshot {
             guard let oldWindow = window, let newWindow = axWindow(focused), CFEqual(oldWindow, newWindow),
                 identity.matchesReplacement(InputIdentity.read(focused)) else { throw VoiceError.message("焦点已离开录音开始时的输入框") }
         }
-        guard let currentValue = axAttribute(focused, kAXValueAttribute) as? String else { throw VoiceError.message("目标输入框文字暂时不可读") }
-        guard currentValue == value else { throw VoiceError.message("目标草稿在录音期间发生了变化") }
+        guard let currentValue = axAttribute(focused, kAXValueAttribute) as? String, currentValue.utf16.count <= 200_000 else { throw VoiceError.message("目标输入框文字暂时不可读") }
         guard let current = selection(focused) else { throw VoiceError.message("目标光标位置暂时不可读") }
-        guard current.location == range.location && current.length == range.length else { throw VoiceError.message("光标或选区已移动") }
-        return focused
+        // Text elsewhere in the field may change while the user speaks (an agent
+        // streaming into the same document, an editor re-rendering). The paste
+        // lands at the caret, so the caret's surroundings are what must match.
+        guard InsertionCheck.caretUnchanged(original: value, range: range, current: currentValue, currentRange: current) else {
+            throw VoiceError.message(currentValue == value ? "光标或选区已移动" : "目标草稿在录音期间发生了变化")
+        }
+        return (focused, currentValue, current)
+    }
+
+    /// This snapshot with the field's state at paste time, for verification and learning.
+    func updated(element: AXUIElement, value: String, range: CFRange) -> InputSnapshot {
+        InputSnapshot(pid: pid, name: name, element: element, value: value, range: range, identity: identity, window: window, anchor: anchor)
     }
     func unchanged() -> Bool { (try? resolve()) != nil }
     func failureReason() -> String? { do { _ = try resolve(); return nil } catch { return error.localizedDescription } }
-    func currentAnchor() -> CGRect? { guard let focused = try? resolve() else { return anchor }; return Self.caretRect(focused, range) ?? axRect(focused) ?? anchor }
+    func currentAnchor() -> CGRect? { guard let now = try? resolveState() else { return anchor }; return Self.caretRect(now.element, now.range) ?? axRect(now.element) ?? anchor }
     func context(enabled: Bool) -> [String: Any] {
         guard enabled else { return [:] }
         let text = value as NSString
@@ -642,23 +655,48 @@ enum InsertionCheck {
         if o.isEmpty { return (false, "cleared") }
         return (false, "different")
     }
+
+    /// Whether the caret is where the user left it: the same selected text and
+    /// the same `context` UTF-16 units before and after it. Changes elsewhere in
+    /// the field do not count. Invisible-character differences are ignored.
+    /// Near the start or end of the field the window is shorter, and new text
+    /// inside it (up to the field boundary) counts as a change.
+    static func caretUnchanged(original: String, range: CFRange, current: String, currentRange: CFRange, context: Int = 24) -> Bool {
+        if original == current && range.location == currentRange.location && range.length == currentRange.length { return true }
+        let a = original as NSString, b = current as NSString
+        guard range.location >= 0, range.length >= 0, currentRange.location >= 0, currentRange.length >= 0,
+              range.location + range.length <= a.length, currentRange.location + currentRange.length <= b.length else { return false }
+        func around(_ s: NSString, _ r: CFRange) -> (String, String, String) {
+            let end = r.location + r.length
+            let before = s.substring(with: NSRange(location: max(0, r.location - context), length: min(context, r.location)))
+            let selected = s.substring(with: NSRange(location: r.location, length: r.length))
+            let after = s.substring(with: NSRange(location: end, length: min(context, s.length - end)))
+            // A trailing newline or space after the caret is how many web editors
+            // end a block, not text the user wrote.
+            return (normalize(before, trimEnd: false), normalize(selected, trimEnd: false), normalize(after, trimEnd: true))
+        }
+        let x = around(a, range), y = around(b, currentRange)
+        return x.0 == y.0 && x.1 == y.1 && x.2 == y.2
+    }
 }
 
 final class TextInserter {
     private(set) var busy = false
     /// How the last paste was (or was not) confirmed, for diagnostics.
     private(set) var lastCheck = ""
+    /// The target as it was when the last paste was sent; the learner watches from there.
+    private(set) var lastTarget: InputSnapshot?
     private var pendingRestore: (() -> Void)?
     func restoreBeforeExit() { pendingRestore?(); pendingRestore = nil }
     func insert(_ text: String, into target: InputSnapshot?, completion: @escaping (Bool, String) -> Void) {
         guard !busy else { completion(false, "上一次粘贴仍在完成，结果已保留"); return }
         guard let target = target else { completion(false, "开始录音时未锁定可编辑输入框，结果已保留"); return }
-        busy = true
+        busy = true; lastTarget = nil
         attempt(text, target: target, retries: 3, completion: completion)
     }
     private func attempt(_ text: String, target: InputSnapshot, retries: Int, completion: @escaping (Bool, String) -> Void) {
-        let resolved: AXUIElement
-        do { resolved = try target.resolve() }
+        let resolved: AXUIElement, state: InputSnapshot
+        do { let now = try target.resolveState(); resolved = now.element; state = target.updated(element: now.element, value: now.value, range: now.range) }
         catch {
             // Short accessibility re-layout failures can recover; never move the user's caret.
             if retries > 0 && error.localizedDescription.contains("暂时") {
@@ -712,12 +750,14 @@ final class TextInserter {
         // bypass Chromium's input/IME routing even when manual Cmd-V works.
         guard target.unchanged() else { restore(); pendingRestore=nil; busy=false; completion(false,"目标已变化，结果已保留"); return }
         down.post(tap:.cghidEventTap); up.post(tap:.cghidEventTap)
-        let expected = (target.value as NSString).replacingCharacters(in: NSRange(location: target.range.location, length: target.range.length), with: text)
+        // Verify against the field as it was when the paste was sent.
+        lastTarget = state
+        let expected = (state.value as NSString).replacingCharacters(in: NSRange(location: state.range.location, length: state.range.length), with: text)
         let began = Date()
         func verify() {
             // Reacquire the AX node after web editors re-render their document.
             let nodes = [resolved, focusedElement(target.pid)].compactMap { $0 }
-            let checks = nodes.map { InsertionCheck.check(original: target.value, inserted: text, expected: expected,
+            let checks = nodes.map { InsertionCheck.check(original: state.value, inserted: text, expected: expected,
                                                          observed: axAttribute($0, kAXValueAttribute) as? String) }
             let verified = checks.contains { $0.verified }
             if !verified && Date().timeIntervalSince(began) < 3 && clipboard.changeCount == ourChange {
