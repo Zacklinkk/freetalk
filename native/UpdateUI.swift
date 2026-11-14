@@ -9,6 +9,13 @@ final class AppUpdateView: NSStackView {
     private let action = NSButton(), cancel = NSButton(), automatic = NSButton()
     private let notes = NSTextView()
     private let noteScroll = NSScrollView()
+    private let noteTitle = NSTextField(labelWithString:"")
+    /// docs/releases/<this version>.md, copied into the app by build.sh.
+    static let bundledNotes: String = {
+        guard let url = Bundle.main.url(forResource:"release-notes",withExtension:"md"),
+              let text = try? String(contentsOf:url,encoding:.utf8) else { return "" }
+        return text.trimmingCharacters(in:.whitespacesAndNewlines)
+    }()
     init(app: AppDelegate) {
         self.app = app; super.init(frame:.zero)
         orientation = .vertical; alignment = .leading; spacing = 16
@@ -32,7 +39,8 @@ final class AppUpdateView: NSStackView {
         notes.textContainerInset = NSSize(width:12,height:12); notes.isVerticallyResizable = true; notes.autoresizingMask = [.width]; notes.textContainer?.widthTracksTextView = true
         notes.setAccessibilityLabel("版本说明")
         noteScroll.documentView = notes; noteScroll.hasVerticalScroller = true; noteScroll.borderType = .bezelBorder
-        addArrangedSubview(noteScroll); noteScroll.widthAnchor.constraint(equalTo:widthAnchor).isActive = true; noteScroll.heightAnchor.constraint(equalToConstant:170).isActive = true
+        noteTitle.font = .systemFont(ofSize:13,weight:.medium); addArrangedSubview(noteTitle)
+        addArrangedSubview(noteScroll); noteScroll.widthAnchor.constraint(equalTo:widthAnchor).isActive = true; noteScroll.heightAnchor.constraint(equalToConstant:220).isActive = true
         addArrangedSubview(app.label("更新只替换应用，已有模型、词库和转写历史继续保留。\n录音、文字处理或模型下载期间不能安装重启。\n当前版本尚未做 Apple 公证；更新后 macOS 可能要求重新关联原有权限。",size:12,color:.secondaryLabelColor))
         refresh()
     }
@@ -48,7 +56,11 @@ final class AppUpdateView: NSStackView {
         cancel.isHidden = !updater.canCancel; cancel.isEnabled = updater.canCancel
         automatic.state = updater.automatic ? .on : .off
         lastCheck.stringValue = updater.lastChecked.map { "上次检查：" + DateFormatter.localizedString(from:$0,dateStyle:.short,timeStyle:.short) } ?? "尚未完成版本检查"
-        notes.string = updater.notes; noteScroll.isHidden = updater.notes.isEmpty
+        // A pending update shows its own notes; otherwise what this version changed.
+        let pending = !updater.notes.isEmpty
+        notes.string = pending ? updater.notes : Self.bundledNotes
+        noteTitle.stringValue = pending ? "新版本说明" : "本版更新内容"
+        noteScroll.isHidden = notes.string.isEmpty; noteTitle.isHidden = noteScroll.isHidden
     }
     @objc private func primary() { app.appUpdater.primaryAction() }
     @objc private func cancelUpdate() { app.appUpdater.cancel() }

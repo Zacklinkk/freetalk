@@ -13,6 +13,8 @@ final class PromptTuningPanel: NSObject {
     private var proposal: [String] = []
     /// The worker is replaying cases; dictation waits until it finishes.
     private(set) var busy = false
+    /// Waiting for the Keychain before a run starts; dictation is not blocked.
+    private var reading = false
     init(app: AppDelegate) { self.app = app; store = CleanupFeedbackStore(directory: app.support); super.init() }
 
     func makeCard() -> NSView {
@@ -40,8 +42,8 @@ final class PromptTuningPanel: NSObject {
         // Tuning needs the service and key, not cloud cleanup itself switched on.
         var cloud = CloudEditorSettings.load(); cloud.enabled = true
         let ready = cloud.configured
-        run.isEnabled = !busy && count >= 3 && ready && app.worker.ready && app.phase == .idle && !app.meetings.busy && proposal.isEmpty
-        if !busy && proposal.isEmpty {
+        run.isEnabled = !busy && !reading && count >= 3 && ready && app.worker.ready && app.phase == .idle && !app.meetings.busy && proposal.isEmpty
+        if !busy && !reading && proposal.isEmpty {
             if count < 3 { result.stringValue = "至少需要 3 条记录。" }
             else if !ready { result.stringValue = "需要先在「语音输入 → 专业配置 → 云端整理」里填好服务和密钥（不必开启云端整理）。" }
         }
@@ -52,7 +54,26 @@ final class PromptTuningPanel: NSObject {
 
     @objc private func start() {
         var cloud = CloudEditorSettings.load(); cloud.enabled = true
-        guard var payload = cloud.payload() else { result.stringValue = "云端服务配置不完整。"; return }
+        guard cloud.configured else { result.stringValue = "云端服务配置不完整。"; return }
+        // Cloud cleanup may be off, so nothing read the key at launch; wait for it here.
+        // Dictation stays available while macOS shows the Keychain prompt.
+        reading = true; refresh(); result.stringValue = "正在读取钥匙串中的密钥…（如果 macOS 询问，请选择“始终允许”）"
+        CloudCredentialStore.prefetch(cloud.baseURL) { [weak self] credentials in
+            guard let self = self else { return }
+            self.reading = false
+            guard let credentials = credentials else {
+                self.result.stringValue = "无法从钥匙串读取 API Key：请在「云端整理」里重新保存，或在系统询问时选择“始终允许”。"
+                self.refresh(); return
+            }
+            guard self.app.worker.ready, self.app.phase == .idle, !self.app.meetings.busy else {
+                self.result.stringValue = "正在口述或处理会议，空闲后再试。"; self.refresh(); return
+            }
+            self.tune(cloud.payload(with: credentials))
+        }
+    }
+
+    private func tune(_ base: [String: Any]) {
+        var payload = base
         let strong = model.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         UserDefaults.standard.set(strong, forKey: "promptTuningModel")
         if !strong.isEmpty { payload["model"] = strong }
