@@ -63,6 +63,8 @@ def main():
                 policy = command.get("cleanup_policy", "auto")
                 engine.cleanup_policy = policy if policy in {"auto", "always", "fast"} else "auto"
                 engine.configure_cloud(command.get("cloud"))
+                if not command.get("cloud") and isinstance(command.get("cloud_unavailable"), str):
+                    engine.cloud_error = command["cloud_unavailable"][:40]
                 result = {"ready": True}
             elif action == "cloud_test":
                 from cloud_client import chat_client, probe

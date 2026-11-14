@@ -55,16 +55,34 @@ final class CloudEditorPanel: NSObject {
         return s
     }
 
+    /// Key and headers typed into the form; nil keeps what the Keychain has.
+    private func typedCredentials() throws -> (key: String?, headers: [String: String]?) {
+        let headerText = try CloudEditorSettings.validated(headers: headers.stringValue)
+        let parsed = headerText.isEmpty ? nil : (try? JSONSerialization.jsonObject(with: Data(headerText.utf8)) as? [String: String]) ?? nil
+        return (key.stringValue.isEmpty ? nil : key.stringValue, parsed)
+    }
+
+    /// Store what was typed (if anything), then run `next` with the result.
+    private func storeTyped(for s: CloudEditorSettings, next: @escaping (Error?) -> Void) throws {
+        let typed = try typedCredentials()
+        guard typed.key != nil || typed.headers != nil else {
+            next(CloudEditorSettings.hasSecret(s.baseURL) ? nil : VoiceError.message("请输入 API Key 后保存")); return
+        }
+        key.stringValue = ""; headers.stringValue = ""
+        CloudCredentialStore.update(s.baseURL, key: typed.key, headers: typed.headers, completion: next)
+    }
+
     @objc func saveSettings() {
         do {
             var s = try readForm()
-            let headerText = try CloudEditorSettings.validated(headers: headers.stringValue)
-            if !key.stringValue.isEmpty { try CloudEditorSettings.setSecret(key.stringValue, account: s.baseURL); key.stringValue = "" }
-            guard CloudEditorSettings.hasSecret(s.baseURL) else { throw VoiceError.message("请输入 API Key 后保存") }
-            if !headers.stringValue.isEmpty { try CloudEditorSettings.setSecret(headerText, account: s.baseURL + "#headers"); headers.stringValue = "" }
             s.enabled = enable.state == .on
-            s.save()
-            status.stringValue = s.enabled ? "已保存，下次录音使用云端模型：\(s.model)" : "已保存。勾选上方开关后启用。"
+            status.stringValue = "正在保存…"
+            try storeTyped(for: s) { [weak self] error in
+                guard let self = self else { return }
+                if let error = error { self.status.stringValue = error.localizedDescription; return }
+                s.save()
+                self.status.stringValue = s.enabled ? "已保存，下次录音使用云端模型：\(s.model)" : "已保存。勾选上方开关后启用。"
+            }
         } catch { status.stringValue = error.localizedDescription }
     }
 
@@ -76,20 +94,23 @@ final class CloudEditorPanel: NSObject {
     @objc func test() {
         do {
             var s = try readForm(); s.enabled = true
-            if !key.stringValue.isEmpty { try CloudEditorSettings.setSecret(key.stringValue, account: s.baseURL); key.stringValue = "" }
-            if !headers.stringValue.isEmpty {
-                try CloudEditorSettings.setSecret(try CloudEditorSettings.validated(headers: headers.stringValue), account: s.baseURL + "#headers")
-                headers.stringValue = ""
-            }
-            guard let payload = s.payload() else { throw VoiceError.message("请输入 API Key 后测试") }
             guard app.worker.ready else { throw VoiceError.message("本地模型就绪后才能测试连接") }
-            status.stringValue = "正在测试…"; testButton.isEnabled = false
-            app.worker.request("cloud_test", ["cloud": payload]) { [weak self] result in
+            status.stringValue = "正在测试…（如果 macOS 询问钥匙串访问，请选择“始终允许”）"; testButton.isEnabled = false
+            try storeTyped(for: s) { [weak self] error in
                 guard let self = self else { return }
-                self.testButton.isEnabled = true
-                switch result {
-                case .success(let value): self.status.stringValue = String(format: "连接正常 · %.1f 秒往返。保存后生效。", value["seconds"] as? Double ?? 0)
-                case .failure(let error): self.status.stringValue = "连接失败：\(CloudEditorSettings.describe(fallback: error.localizedDescription))"
+                if let error = error { self.status.stringValue = error.localizedDescription; self.testButton.isEnabled = true; return }
+                CloudCredentialStore.prefetch(s.baseURL) { credentials in
+                    guard let credentials = credentials else {
+                        self.status.stringValue = "无法从钥匙串读取 API Key：请重新输入，或在系统询问时选择“始终允许”。"; self.testButton.isEnabled = true; return
+                    }
+                    self.app.worker.request("cloud_test", ["cloud": s.payload(with: credentials)]) { [weak self] result in
+                        guard let self = self else { return }
+                        self.testButton.isEnabled = true
+                        switch result {
+                        case .success(let value): self.status.stringValue = String(format: "连接正常 · %.1f 秒往返。保存后生效。", value["seconds"] as? Double ?? 0)
+                        case .failure(let error): self.status.stringValue = "连接失败：\(CloudEditorSettings.describe(fallback: error.localizedDescription))"
+                        }
+                    }
                 }
             }
         } catch { status.stringValue = error.localizedDescription; testButton.isEnabled = true }
