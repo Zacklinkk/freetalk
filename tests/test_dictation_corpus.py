@@ -172,6 +172,38 @@ class StrayPunctuationTests(unittest.TestCase):
                 self.assertFalse(tidy_punctuation(text)[0].startswith('，'))
 
 
+class PunctuationEditTests(unittest.TestCase):
+    """The editor may move, add or remove punctuation, within limits."""
+
+    def edit(self, raw, old, new):
+        plan = {'repairs': [], 'edits': [{'old': old, 'new': new, 'kind': 'punctuation'}], 'breaks': [], 'bullets': []}
+        text, details = apply_plan(raw, plan, {})
+        return text, [e['reason'] for e in details.get('rejected_edits', [])]
+
+    def test_accepted(self):
+        for raw, old, new, expected in [
+            ('我们先把这个接口。改成异步的。', '接口。改成', '接口改成', '我们先把这个接口改成异步的。'),      # a pause cut the sentence
+            ('你觉得这样可以吗。我先发给他。', '吗。', '吗？', '你觉得这样可以吗？我先发给他。'),            # question particle
+            ('为什么这个接口会超时。先查日志。', '超时。', '超时？', '为什么这个接口会超时？先查日志。'),      # question word earlier in the clause
+            ('先跑测试然后再看结果。', '测试然后', '测试，然后', '先跑测试，然后再看结果。'),                # missing comma
+            ('不需要写入配置。或者不写入，效果更好。', '配置。或者', '配置，或者', '不需要写入配置，或者不写入，效果更好。'),
+        ]:
+            with self.subTest(raw=raw):
+                self.assertEqual(self.edit(raw, old, new), (expected, []))
+
+    def test_refused(self):
+        for raw, old, new, reason in [
+            ('他说“好的。”然后就走了。', '“好的。”', '“好的”', 'literal_span'),
+            ('这个方案可行吗？我觉得可以。', '可行吗？', '可行吗。', 'question_removed'),
+            ('明天开会。记得带电脑。', '开会。', '开会？', 'question_added_without_question'),
+            ('太好了！终于跑通了。', '太好了！', '太好了。', 'exclamation_changed'),
+            ('先看（附录）再说。', '（附录）', '附录', 'paired_mark_changed'),
+        ]:
+            with self.subTest(raw=raw):
+                text, reasons = self.edit(raw, old, new)
+                self.assertEqual((text, reasons), (raw, [reason]))
+
+
 class LayoutSafetyTests(unittest.TestCase):
     """A cleanup pass must never invent structure the speaker did not use."""
 

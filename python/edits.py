@@ -174,6 +174,42 @@ def rewrites_learned_alias(raw,old,new,start,end,context):
         if term and term in outside: return True
     return False
 
+# A clause that can end in "？": a question particle at its end, or a question word in it.
+QUESTION_CLAUSE = re.compile(r'(?:[吗嘛呢么][^\w]{0,2}$|是否|是不是|能不能|可不可以|要不要|有没有|会不会|对不对|好不好|行不行|对吧|什么|怎么|为什么|为何|哪|谁|多少|几[个点次天位]|如何|or not|\?$)')
+PAIRED = '“”‘’「」『』《》（）()[]【】"\''
+
+
+def punctuation_problem(raw, old, new, start):
+    """Reason to refuse a punctuation-only edit, or None to accept it.
+
+    Dictation arrives in pause-delimited pieces and the recognizer closes each
+    with a mark, so a sentence can be cut in two, lose its question mark, or
+    run on without commas. The editor may move, add or remove punctuation and
+    so join or split sentences. It may not touch quotes, brackets or literals,
+    turn a question into a statement, or change the tone with "！".
+    """
+    if len(old) > 160 or len(new) > 180:
+        return 'punctuation_too_long'
+    if start >= 0 and protected_span(raw, start, start + len(old)):
+        return 'literal_span'
+    if any(old.count(c) != new.count(c) for c in PAIRED):
+        return 'paired_mark_changed'
+    if old.count('！') + old.count('!') != new.count('！') + new.count('!'):
+        return 'exclamation_changed'
+    asked = lambda t: t.count('？') + t.count('?')
+    if asked(new) < asked(old):
+        return 'question_removed'
+    if asked(new) > asked(old):
+        # Every question mark must close a clause that asks something; read the
+        # clause from the original text before the edit as well.
+        before = raw[:max(0, start)]
+        for m in re.finditer(r'[？?]', new):
+            clause = re.split(r'[。！？!?；;\n]', before + new[:m.start()])[-1]
+            if not QUESTION_CLAUSE.search(clause):
+                return 'question_added_without_question'
+    return None
+
+
 def tidy_punctuation(text):
     """Remove punctuation a deletion left without its words.
 
@@ -559,7 +595,7 @@ def apply_plan(raw, plan, context):
         # never duplicate that suffix or reinterpret a substantive replacement.
         if start>=0 and new and raw[end:].startswith(new) and contextual_cleanup(raw,old,'',start,edit.get('kind')):
             new=''
-        if core(old)==core(new) and any(p in old and p not in new for p in '。！？!?') and repair_false_stops(old)[0] != new:reason='sentence_boundary_change'
+        if core(old)==core(new) and old!=new:reason=punctuation_problem(raw,old,new,start)
         if not reason and protected_span(raw,start,end):reason='literal_span'
         if not reason and rewrites_learned_alias(raw,old,new,start,end,context):reason='learned_alias_requires_audio'
         discourse=contextual_cleanup(raw,old,new,start,edit.get('kind'))
