@@ -54,11 +54,18 @@ struct CloudEditorSettings {
         return text
     }
 
-    /// The request payload for the worker, or nil when the cloud editor is off or incomplete.
+    /// The request payload for the worker, or nil when the cloud editor is off,
+    /// incomplete, or its credentials have not been read from the Keychain yet.
+    /// Never touches the Keychain itself, so it cannot block on a system prompt.
     func payload() -> [String: Any]? {
-        guard enabled, !baseURL.isEmpty, !model.isEmpty, let key = Self.secret(baseURL), !key.isEmpty else { return nil }
-        var value: [String: Any] = ["protocol": protocolName, "base_url": baseURL, "model": model, "api_key": key, "timeout_seconds": timeout]
-        if let text = Self.secret(baseURL + "#headers"), let headers = try? JSONSerialization.jsonObject(with: Data(text.utf8)) { value["headers"] = headers }
+        guard enabled, !baseURL.isEmpty, !model.isEmpty else { return nil }
+        guard let credentials = CloudCredentialStore.cached(baseURL) else { CloudCredentialStore.prefetch(baseURL); return nil }
+        return payload(with: credentials)
+    }
+
+    func payload(with credentials: CloudCredentials) -> [String: Any] {
+        var value: [String: Any] = ["protocol": protocolName, "base_url": baseURL, "model": model, "api_key": credentials.key, "timeout_seconds": timeout]
+        if !credentials.headers.isEmpty { value["headers"] = credentials.headers }
         return value
     }
 
@@ -74,6 +81,7 @@ struct CloudEditorSettings {
     /// Complete enough to try: switched on, endpoint, model and a stored key.
     var configured: Bool { enabled && !baseURL.isEmpty && !model.isEmpty && Self.hasSecret(baseURL) }
 
+    /// Reading a value can show a Keychain prompt; call it off the main thread.
     static func secret(_ account: String) -> String? {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
             kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
@@ -98,6 +106,7 @@ struct CloudEditorSettings {
     /// Short, user-facing wording for a worker fallback reason code.
     static func describe(fallback reason: String) -> String {
         switch reason {
+        case "keychain_pending": return "正在等待钥匙串授权"
         case "timeout": return "云端整理超时"
         case "network": return "无法连接云端整理服务"
         case "redirect": return "云端地址发生重定向"
@@ -109,3 +118,91 @@ struct CloudEditorSettings {
         }
     }
 }
+
+/// API key and gateway headers for one endpoint.
+struct CloudCredentials: Equatable {
+    var key: String
+    var headers: [String: String] = [:]
+
+    /// One Keychain value holds both, so macOS asks at most once per build.
+    /// freetalk is signed without an Apple team ID, so the Keychain partition
+    /// list records each build's code hash: a new build must be allowed again.
+    func encoded() -> String {
+        let object: [String: Any] = ["key": key, "headers": headers]
+        let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// The stored value, or nil if empty. Before version 0.6 the item held the
+    /// bare key and the headers lived in a second "#headers" item; `legacy`
+    /// tells the caller to merge that item in once.
+    static func decode(_ text: String) -> (credentials: CloudCredentials, legacy: Bool)? {
+        if let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+           let key = object["key"] as? String, !key.isEmpty {
+            let headers = (object["headers"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
+            return (CloudCredentials(key: key, headers: headers), false)
+        }
+        let key = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return key.isEmpty ? nil : (CloudCredentials(key: key), true)
+    }
+}
+
+/// Reads credentials once per launch, off the main thread, and keeps them in
+/// memory. A Keychain prompt then appears at most once per launch (and only
+/// for a new build), never in the middle of starting a recording.
+enum CloudCredentialStore {
+    private static let lock = NSLock()
+    private static var cache: [String: CloudCredentials] = [:]
+    private static var loading: Set<String> = []
+
+    static func cached(_ endpoint: String) -> CloudCredentials? { lock.lock(); defer { lock.unlock() }; return cache[endpoint] }
+    static var isLoading: Bool { lock.lock(); defer { lock.unlock() }; return !loading.isEmpty }
+
+    /// Start a background read unless one is running or the value is cached.
+    static func prefetch(_ endpoint: String, completion: ((CloudCredentials?) -> Void)? = nil) {
+        lock.lock()
+        if let value = cache[endpoint] { lock.unlock(); completion.map { done in DispatchQueue.main.async { done(value) } }; return }
+        let started = loading.insert(endpoint).inserted
+        lock.unlock()
+        guard started else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let value = read(endpoint)
+            lock.lock(); loading.remove(endpoint); if let value = value { cache[endpoint] = value }; lock.unlock()
+            if let done = completion { DispatchQueue.main.async { done(value) } }
+        }
+    }
+
+    /// Blocking read with the one-time merge of the old two-item layout.
+    private static func read(_ endpoint: String) -> CloudCredentials? {
+        guard let text = CloudEditorSettings.secret(endpoint), let (credentials, legacy) = CloudCredentials.decode(text) else { return nil }
+        guard legacy else { return credentials }
+        var merged = credentials
+        if let headersText = CloudEditorSettings.secret(endpoint + "#headers"),
+           let object = try? JSONSerialization.jsonObject(with: Data(headersText.utf8)) as? [String: Any] {
+            merged.headers = object.compactMapValues { $0 as? String }
+        }
+        // Writing is allowed without a prompt; the old headers item is left in
+        // place (deleting it could prompt) and is never read again.
+        try? CloudEditorSettings.setSecret(merged.encoded(), account: endpoint)
+        return merged
+    }
+
+    /// Replace the key and/or headers. A nil field keeps the stored value, which
+    /// needs one read; this runs in the background and reports on the main thread.
+    static func update(_ endpoint: String, key: String?, headers: [String: String]?, completion: @escaping (Error?) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let existing = (key == nil || headers == nil) ? (cached(endpoint) ?? read(endpoint)) : nil
+            let value = CloudCredentials(key: key ?? existing?.key ?? "", headers: headers ?? existing?.headers ?? [:])
+            var failure: Error?
+            if value.key.isEmpty { failure = VoiceError.message("请输入 API Key 后保存") }
+            else {
+                do {
+                    try CloudEditorSettings.setSecret(value.encoded(), account: endpoint)
+                    lock.lock(); cache[endpoint] = value; lock.unlock()
+                } catch { failure = error }
+            }
+            DispatchQueue.main.async { completion(failure) }
+        }
+    }
+}
+

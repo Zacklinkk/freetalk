@@ -116,6 +116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loadHotkeyBindings()
         createMenu(); createWindow(); refreshDevices()
         meetings.connect()
+        // Read cloud credentials once at launch, in the background: after an
+        // update macOS asks here, not when the next recording starts.
+        let cloudSettings = CloudEditorSettings.load()
+        if cloudSettings.configured { CloudCredentialStore.prefetch(cloudSettings.baseURL) }
         appUpdater.canInstall = { [weak self] in
             guard let self = self else { return false }
             return self.phase == .idle && !self.inserter.busy && !self.modelSetup.busy && !self.meetings.busy
@@ -598,7 +602,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let policy = ["auto", "always", "fast"][cleanupPicker.indexOfSelectedItem]
         var begin: [String: Any] = ["context": context, "cleanup_policy": policy]
         // Fast-only mode never reaches a model; keep the cloud out of it entirely.
-        if policy != "fast", let cloud = CloudEditorSettings.load().payload() { begin["cloud"] = cloud }
+        if policy != "fast" {
+            let cloudSettings = CloudEditorSettings.load()
+            if let cloud = cloudSettings.payload() { begin["cloud"] = cloud }
+            // Credentials are read in the background; until macOS has granted
+            // Keychain access this utterance uses the local model and says so.
+            else if cloudSettings.configured { begin["cloud_unavailable"] = "keychain_pending" }
+        }
         worker.request("begin", begin) { response in
             guard self.session == token, self.phase == .preparing else { return }
             switch response {
