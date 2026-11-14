@@ -41,7 +41,47 @@ REDUPLICATED = frozenset('''
 啦啦 零零 丁丁 冬冬 一一 人人 天天 岁岁 户户 碗碗 杯杯 盘盘 斤斤 两两 双双 对对 双双 点点
 往往 每每 渐渐 恰恰 刚刚 正正 偏偏 单单 白白 徒徒 空空 茫茫 纷纷 匆匆 悄悄 默默 冉冉 徐徐
 依依 恋恋 津津 有味 头头 面面 事事 时时 处处 人人 家家 户户 世世 代代 子子 孙孙 层层 级级
+好好 等等 大大 多多 早早 稍稍 偷偷 静静 紧紧 牢牢 满满 样样 足足 频频 屡屡 连连 小小 区区 略略
+长长 快快 稳稳 少少 月月 夜夜
 '''.split())
+
+# Words that end in a character the next word often starts with. 一下|下周,
+# 马上|上线, 想到|到底 and 现在|在开会 double a character without a stutter,
+# and collapsing them changes the meaning (一下周二, 马上线, 功能不能用).
+BOUNDARY_WORDS = frozenset('''
+马上 早上 晚上 线上 网上 身上 手上 路上 以上 加上 跟上 赶上 关上 带上 算上 楼上 地上
+一下 以下 之下 天下 地下 底下 私下 当下 眼下 留下 剩下 放下 坐下 停下 写下 记下 楼下
+想到 说到 看到 听到 提到 做到 达到 得到 遇到 收到 找到 直到 等到 讲到 来到 回到 用到 碰到 拿到
+为了 除了 完了 算了 好了 对了 罢了 所有 没有 只有 还有 拥有 具有 含有
+现在 正在 存在 实在 所在 就是 但是 还是 可是 只是 总是 于是 不是 要是 或是 凡是 正是 也是 都是
+这个 那个 一个 每个 各个 整个 哪个 两个 几个 今天 明天 昨天 每天 当天 白天 半天 整天 聊天
+今年 去年 明年 每年 当年 半年 多年 个月 上月 下月 本月 每月 当月 开会 学会 机会 社会 不会
+同时 及时 当时 有时 平时 随时 暂时 按时 需要 主要 重要 想要 只要 不要 还要 就要 也要
+可能 不能 只能 功能 性能 技能 智能 变更 出来 起来 回来 进来 过来 下来 上来 后来 本来 原来
+出去 回去 过去 进去 下去 上去 后面 前面 下面 上面 里面 外面 方面 目的 有的 别的
+体系 关系 联系 部分 充分 十分 区分 划分 评分 积分 得分 成分 百分 规模 英语 术语 用语 口语
+成功 前提 必需 所需 认可 许可 不可 宁可 体操
+'''.split())
+
+
+def word_boundary(raw, start):
+    """Whether the doubled character at `start` is a word, not a stutter.
+
+    Either it ends the previous word (一下|下周), or the doubling is itself a
+    pattern: 一步步/一层层, 上上周/下下个月, 整整等了 (but 整整理 is 整理), and
+    the first or second half of AABB (干干净净, 清清楚楚, 上上下下).
+    """
+    char, previous = raw[start], raw[start - 1:start] if start else ''
+    after = raw[start + 2:start + 4]
+    if previous + char in BOUNDARY_WORDS:
+        return True
+    if previous == '一' and char in '下步层遍次页天年点句张行条件个份批轮圈片段道':
+        return True
+    if char in '上下' and after[:1] and after[0] in '周个次月回期届层半季轮':
+        return True
+    if char == '整' and after[:1] and after[0] not in '理体合改顿洁齐数形容装修治编个':
+        return True
+    return (len(after) == 2 and after[0] == after[1] != char) or (start >= 2 and raw[start - 2] == raw[start - 1] != char)
 
 def allowed(old, new, context):
     a, b = core(old), core(new)
@@ -305,6 +345,7 @@ def preclean(raw, context=None):
                 start=re.search(r',\s*$',raw[:start]).start();replacement=' '
             add(start,m.end(),replacement)
     for m in re.finditer(r'(?P<word>我们|你们|他们|它们|这个|那个|这种|那种|使用|进行|处理|我|你|这|那|更)(?P=word)+',raw):
+        if len(m.group('word')) == 1 and word_boundary(raw, m.start()): continue
         add(m.start(),m.end(),m.group('word'))
     for m in re.finditer(r'(?P<word>这个|那个|这种|那种)[，,]\s*(?P=word)',raw):
         add(m.start(),m.end(),m.group('word'))
@@ -323,9 +364,10 @@ def preclean(raw, context=None):
     # 都/也/就 are handled above with word-boundary checks (成都都/成就就 are
     # legitimate). Runs last so 系统系系统 collapses to 系统, not 系统系统.
     for m in re.finditer(r'([一-鿿])\1',raw):
-        if m.group(0) in REDUPLICATED or m.group(1) in '都也就': continue
+        if m.group(0) in REDUPLICATED or m.group(1) in '都也就' or word_boundary(raw, m.start()): continue
         add(m.start(),m.end(),m.group(1))
     for m in re.finditer(r'能(?=能不能)|可(?=可不可以)|需(?=需要)|操(?=操控)|系(?=系统)|分(?=分区)|语(?=语义)|模(?=模型)|功(?=功能)|提(?=提示词)',raw):
+        if word_boundary(raw, m.start()): continue
         add(m.start(),m.end(),'')
     # Exact adjacent restarts only. Near matches go to triage and retain new detail.
     for m in re.finditer(r'(?P<clause>[^，,。.!！?？;；\n]{5,60})[，,]\s*(?P=clause)',raw):
@@ -595,7 +637,12 @@ def apply_plan(raw, plan, context):
         # never duplicate that suffix or reinterpret a substantive replacement.
         if start>=0 and new and raw[end:].startswith(new) and contextual_cleanup(raw,old,'',start,edit.get('kind')):
             new=''
-        if core(old)==core(new) and old!=new:reason=punctuation_problem(raw,old,new,start)
+        # Models often drop the closing mark when an edit reaches the end of
+        # the dictation; the speaker still ended the sentence.
+        if not reason and end==len(raw) and new and old[-1] in '。！？!?' and new[-1] not in '。！？!?…':
+            new=new.rstrip('，,、；;：: ')+old[-1]
+            if new==old: continue
+        if not reason and core(old)==core(new) and old!=new:reason=punctuation_problem(raw,old,new,start)
         if not reason and protected_span(raw,start,end):reason='literal_span'
         if not reason and rewrites_learned_alias(raw,old,new,start,end,context):reason='learned_alias_requires_audio'
         discourse=contextual_cleanup(raw,old,new,start,edit.get('kind'))
