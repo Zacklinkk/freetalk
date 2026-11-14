@@ -109,7 +109,7 @@ class Editor:
         examples = json.loads((ROOT / 'prompts' / example_file).read_text())
         # Keep positive and negative examples; avoid nine competing mini-dialogues
         # that the small model can accidentally continue instead of editing the input.
-        self.base += sum((examples[i:i+2] for i in (0,8,12,14)), []) if mode == 'edits' else examples
+        self.base += sum((examples[i:i+2] for i in (0,8,12,14,18)), []) if mode == 'edits' else examples
         self.prefix, self.cache = self.prepare_prefix(self.base)
         from filler_selection import PROMPT
         self.filler_base = [{'role':'system','content':with_preferences(PROMPT, self.preferences)}]

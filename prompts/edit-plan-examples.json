@@ -70,5 +70,13 @@
   {
     "role": "assistant",
     "content": "{\"repairs\":[],\"edits\":[{\"old\":\"日只\",\"new\":\"日志\",\"kind\":\"spelling\"}],\"breaks\":[],\"bullets\":[]}"
+  },
+  {
+    "role": "user",
+    "content": "检测提示（不等于删除许可）：dictation_review\n请生成局部修改清单。\n排版：连续段落\n句子：[[0,\"我们先把这个接口。\"],[1,\"改成异步的然后你看看这样可以吗。\"]]"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"repairs\":[],\"edits\":[{\"old\":\"接口。改成\",\"new\":\"接口改成\",\"kind\":\"punctuation\"},{\"old\":\"异步的然后\",\"new\":\"异步的，然后\",\"kind\":\"punctuation\"},{\"old\":\"可以吗。\",\"new\":\"可以吗？\",\"kind\":\"punctuation\"}],\"breaks\":[],\"bullets\":[]}"
   }
 ]
