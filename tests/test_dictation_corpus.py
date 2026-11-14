@@ -63,6 +63,22 @@ class DoubledCharacterTests(unittest.TestCase):
         # 系统系系统 collapses to 系统, not 系统系统.
         self.assertEqual(preclean('系统系系统能能不能操操控？')[0], '系统能不能操控？')
 
+    def test_a_word_ending_where_the_next_begins_is_not_a_stutter(self):
+        # 一下|下周 lost 下 and turned next Tuesday into this Tuesday.
+        for raw in ['我想跟您确认一下下周二的答辩时间。', '我们马上上线。', '没想到到底这么难。', '为了了解用户需求。',
+                    '每个月月初发工资。', '我现在在开会。', '这次变更更新了三个接口。', '早上上班前看一下。',
+                    '我整整等了一个小时。', '你好好想想。', '我们一步步来。', '上上周的版本有问题。',
+                    '这个功能能不能用？', '大规模模型训练要多久？', '部分分区还没迁移。', '写教学讲解等等。',
+                    '房间要干干净净的。', '排着长长的队。']:
+            with self.subTest(raw=raw):
+                self.assertEqual(preclean(raw)[0], raw)
+
+    def test_stutters_next_to_those_words_still_collapse(self):
+        for raw, expected in [('我们上上线了吗？', '我们上线了吗？'), ('默认的整整理日日常的整理', '默认的整理日常的整理'),
+                              ('整整个下午都在开会。', '整个下午都在开会。'), ('帮你登登录一下。', '帮你登录一下。')]:
+            with self.subTest(raw=raw):
+                self.assertEqual(preclean(raw)[0], expected)
+
 
 class RepairBoundaryTests(unittest.TestCase):
     """Spoken self-corrections keep the reason and drop only the old value."""
@@ -198,10 +214,18 @@ class PunctuationEditTests(unittest.TestCase):
             ('明天开会。记得带电脑。', '开会。', '开会？', 'question_added_without_question'),
             ('太好了！终于跑通了。', '太好了！', '太好了。', 'exclamation_changed'),
             ('先看（附录）再说。', '（附录）', '附录', 'paired_mark_changed'),
+            # The model quoted a span that is not in the dictation. Applying it
+            # at offset -1 used to delete the first characters of the text.
+            ('我们先把登录接口。改成异步的，然后再压测。', '异步的然后', '异步的，然后', 'source_not_unique'),
         ]:
             with self.subTest(raw=raw):
                 text, reasons = self.edit(raw, old, new)
                 self.assertEqual((text, reasons), (raw, [reason]))
+
+    def test_an_edit_at_the_end_keeps_the_final_mark(self):
+        # Local models drop the closing 。 when a merge reaches the end.
+        self.assertEqual(self.edit('我们先把登录接口。改成异步的，然后再压测。', '接口。改成异步的，然后再压测。', '接口改成异步的，然后再压测'),
+                         ('我们先把登录接口改成异步的，然后再压测。', []))
 
 
 class LayoutSafetyTests(unittest.TestCase):
