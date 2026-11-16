@@ -701,7 +701,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if duration < 0.15 || peak < 0.001 {
                 self.phase = .idle; self.hudTimer?.invalidate(); self.hud.finish(success: false, message: "没有检测到语音"); self.setStatus("没有检测到语音，请检查麦克风音量"); return
             }
-            self.timeout = Timer.scheduledTimer(withTimeInterval: 35, repeats: false) { _ in
+            // Translation adds up to two model calls (cloud, then local) after cleanup.
+            self.timeout = Timer.scheduledTimer(withTimeInterval: self.translating ? 60 : 35, repeats: false) { _ in
                 guard self.session == token, self.phase == .processing else { return }
                 let trial = self.tutorialSession
                 if !trial { self.lastRaw = self.partial; self.lastText = self.partial; self.saveResult() }
