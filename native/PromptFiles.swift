@@ -13,6 +13,7 @@ struct PromptFiles {
         ("restart-plan-examples.json", "整句撤回示例", "JSON 数组，用户（user）与助手（assistant）交替。"),
         ("filler-selection.txt", "口水词选择", "只需要判断口水词去留时使用的短提示词。"),
         ("prompt-tuning.txt", "规则优化", "「整理规则优化」发给云端模型的提示词。"),
+        ("prompt-rewrite.txt", "规则重写", "整理偏好积累到 8 条时，请强模型把它们并入整理规则所用的提示词。"),
         ("translation.txt", "翻译输入", "翻译输入时发给翻译模型的系统提示词；目标语言随原文一起发送。"),
     ]
 
@@ -64,6 +65,25 @@ struct PromptFiles {
         let url = editedDirectory.appendingPathComponent(file)
         try Data(text.utf8).write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    /// Copy the edited copy of `file`, if there is one, to backups/<name>-<time>.<ext>
+    /// before something else replaces it. The newest 10 backups of a file are kept.
+    @discardableResult func backup(_ file: String, now: Date = Date()) throws -> URL? {
+        let source = editedDirectory.appendingPathComponent(file)
+        guard FileManager.default.fileExists(atPath: source.path) else { return nil }
+        let folder = editedDirectory.appendingPathComponent("backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let stem = (file as NSString).deletingPathExtension, ext = (file as NSString).pathExtension
+        let target = folder.appendingPathComponent("\(stem)-\(formatter.string(from: now)).\(ext)")
+        if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+        try FileManager.default.copyItem(at: source, to: target)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+        let kept = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(stem + "-") }.sorted { $0.lastPathComponent > $1.lastPathComponent }
+        for old in kept.dropFirst(10) { try? FileManager.default.removeItem(at: old) }
+        return target
     }
 
     func reset(_ file: String) throws {

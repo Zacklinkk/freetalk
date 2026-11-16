@@ -27,9 +27,10 @@ def tune_prompt(engine, command, emit):
     without asking (prompt_tuning.decide); the app saves them, or shows them.
     The editor's own rules are restored before returning.
     """
-    from cloud_client import chat_client
+    import prompt_files
+    from cloud_client import CloudUnavailable, chat_client
     from engine import prompt
-    from prompt_tuning import propose, evaluate, decide
+    from prompt_tuning import CONSOLIDATE_AT, consolidate, propose, evaluate, decide
     from cleanup_eval import summary, regressions
     settings = command.get("cloud") or {}
     client = chat_client(settings.get("protocol", "openai"), settings.get("base_url", ""), settings.get("model", ""),
@@ -41,34 +42,52 @@ def tune_prompt(engine, command, emit):
     current = engine.editor.preferences
     emit({"event": "tune-progress", "stage": "propose", "completed": 0, "total": 1})
     rules, detail = propose(client, cases, prompt("edit-plan.txt"), current)
-    if not rules or rules == current:
+    if not rules or (rules == current and len(rules) < CONSOLIDATE_AT):
         return {"rules": [], "previous": current, "adopt": False, "reason": "没有找到可靠的共性问题", **detail}
+    # Enough preferences: merge them into the rule text instead of appending more.
+    rewritten = None
+    if len(rules) >= CONSOLIDATE_AT:
+        emit({"event": "tune-progress", "stage": "rewrite", "completed": 0, "total": 1})
+        try:
+            rewritten = consolidate(client, prompt_files.source("edit-rules.txt"), rules)
+        except CloudUnavailable as error:
+            detail["rewrite_failure"] = error.reason
     # Replay the way dictation runs: the user's cleanup mode and personal terms.
     # The original input-field context is not stored, so it is not replayed.
     policy = command.get("policy") if command.get("policy") in {"auto", "always", "fast"} else "auto"
     context = normalize_context({"personal_terms": command.get("terms", [])})
-    def edit(raw, rule_set):
-        if engine.editor.preferences != rule_set:
-            engine.editor.set_preferences(rule_set)
+    # A setup is (preferences, rewritten rule text or None).
+    old, new = (tuple(current), None), ((), rewritten) if rewritten else (tuple(rules), None)
+    applied = []
+    def use(setup):
+        if applied != [setup]:
+            prompt_files.pending = {"edit-rules.txt": setup[1]} if setup[1] else {}
+            engine.editor.set_preferences(list(setup[0]))
+            applied[:] = [setup]
+    def edit(raw, setup):
+        use(setup)
         text, _ = engine.editor.edit(raw, context, 8, policy)
         return text
     remote, engine.editor.remote = engine.editor.remote, None
     try:
-        scores, examples = evaluate(edit, cases, accepted, current, rules,
+        scores, examples = evaluate(edit, cases, accepted, old, new,
                                     lambda done, total: emit({"event": "tune-progress", "stage": "replay", "completed": done, "total": total}))
         # The eval set: fixed cases the user approved. Old rules first, then new.
-        engine.editor.set_preferences(current)
+        use(old)
         before = run_eval_set(engine, emit, "eval-before")
-        engine.editor.set_preferences(rules)
+        use(new)
         after = run_eval_set(engine, emit, "eval-after")
     finally:
         engine.editor.remote = remote
-        if engine.editor.preferences != current:
-            engine.editor.set_preferences(current)
+        prompt_files.pending = {}
+        engine.editor.set_preferences(current)
     adopt, reason = decide(scores, before, after)
-    return {"rules": rules, "previous": current, "scores": scores, "examples": examples, "adopt": adopt, "reason": reason,
-            "eval": {"before": summary(before)["exact"], "after": summary(after)["exact"], "total": len(after),
-                     "regressions": regressions(before, after)}, **detail}
+    result = {"rules": [] if rewritten else rules, "previous": current, "scores": scores, "examples": examples, "adopt": adopt,
+              "reason": reason, "eval": {"before": summary(before)["exact"], "after": summary(after)["exact"], "total": len(after),
+                                         "regressions": regressions(before, after)}, **detail}
+    if rewritten:
+        result.update(prompt=rewritten, merged=rules)
+    return result
 
 
 def check_prompt(engine, command, emit):

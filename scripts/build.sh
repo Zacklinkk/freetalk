@@ -47,6 +47,8 @@ if [ "$plist_target" != "$deployment_target" ] || [ "$binary_target" != "$deploy
 fi
 ditto "$project_dir/python" "$app_dir/Contents/Resources/python"
 ditto "$project_dir/prompts" "$app_dir/Contents/Resources/prompts"
+# Rule tuning and the prompt check run the cleanup eval set inside the app.
+ditto "$project_dir/evals" "$app_dir/Contents/Resources/evals"
 ditto "$project_dir/setup" "$app_dir/Contents/Resources/setup"
 ditto "$project_dir/integrations" "$app_dir/Contents/Resources/integrations"
 rm -f "$app_dir/Contents/MacOS/freetalk-cli"

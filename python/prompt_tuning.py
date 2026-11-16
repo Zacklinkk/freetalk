@@ -6,7 +6,11 @@ A strong cloud model reads those cases and writes a few general preferences.
 The local editor then replays the cases and the eval set (evals/) with the old
 and the new preferences; the new ones are adopted only if neither got worse
 (see decide). The existing safety checks still apply afterwards.
-The optimizer's prompt is prompts/prompt-tuning.txt.
+
+Preferences are appended to the rules. Once there are CONSOLIDATE_AT of them,
+the strong model rewrites the rule text with them merged in instead
+(consolidate); the rewrite goes through the same replay and eval set.
+The optimizer's prompts are prompts/prompt-tuning.txt and prompt-rewrite.txt.
 """
 import json
 import re
@@ -18,6 +22,9 @@ MAX_ACCEPTED = 10
 MAX_TEXT = 800
 MAX_RULES = 10
 MAX_RULE_CHARS = 80
+CONSOLIDATE_AT = 8
+# Words the validators and the plan format depend on; a rewrite must keep them.
+REQUIRED_WORDS = ('repairs', 'edits', 'old', 'new', 'cue', 'kind', 'breaks', 'bullets', 'filler', 'spelling', 'stutter', 'punctuation')
 
 
 def clean_rules(values):
@@ -59,6 +66,34 @@ def propose(complete, cases, current_rules, preferences, timeout=240):
     return rules, detail
 
 
+def rewrite_problem(old, new):
+    """Why a rewritten rule text must not replace `old`, or None."""
+    if not isinstance(new, str) or not new.strip():
+        return 'empty_rewrite'
+    if len(new) > 1.5 * len(old) + 200 or len(new) < .5 * len(old):
+        return 'rewrite_length'
+    if any(word in old and word not in new for word in REQUIRED_WORDS):
+        return 'rewrite_drops_fields'
+    return None
+
+
+def consolidate(complete, rules_text, preferences, timeout=240):
+    """The strong model's rule text with `preferences` merged in, or raise CloudUnavailable."""
+    from prompt_files import source
+    reply = complete([{'role': 'system', 'content': source('prompt-rewrite.txt')},
+                      {'role': 'user', 'content': json.dumps({'rules': rules_text, 'preferences': preferences}, ensure_ascii=False)}],
+                     8000, timeout)
+    try:
+        value = json_object(reply)
+    except ValueError:
+        raise CloudUnavailable('invalid_json') from None
+    text = value.get('rules') if isinstance(value, dict) else None
+    reason = rewrite_problem(rules_text, text)
+    if reason:
+        raise CloudUnavailable(reason)
+    return text.strip() + '\n'
+
+
 def distance(a, b):
     row = list(range(len(b) + 1))
     for i, x in enumerate(a, 1):
@@ -69,11 +104,11 @@ def distance(a, b):
 
 
 def decide(scores, eval_before, eval_after):
-    """Whether to adopt new preferences without asking, and why.
+    """Whether to adopt new rules without asking, and why.
 
-    The replay must move at least one case toward what the user kept, move
-    none away and leave every untouched dictation as it was; the eval set must
-    lose no case it matched before. Anything else is shown, not adopted.
+    "Not worse" is the bar the user set: the replay moves no case away from
+    what the user kept and leaves every untouched dictation as it was, and the
+    eval set loses no case it matched before. Anything else is shown, not adopted.
     """
     from cleanup_eval import regressions, summary
     lost = regressions(eval_before, eval_after)
@@ -86,9 +121,8 @@ def decide(scores, eval_before, eval_after):
         return False, f'{scores["worse"]} 条记录离你改后的文字更远'
     if scores['accepted_changed']:
         return False, f'{scores["accepted_changed"]} 条你没改过的口述结果会变化'
-    if not scores['improved']:
-        return False, '没有记录变得更接近你改后的文字'
-    return True, f'{scores["improved"]} 条记录更接近你改后的文字，测试集 {before} → {after} 条通过'
+    closer = f'{scores["improved"]} 条记录更接近你改后的文字' if scores['improved'] else '记录没有变差'
+    return True, f'{closer}，测试集 {before} → {after} 条通过'
 
 
 def evaluate(edit, cases, accepted, old_rules, new_rules, progress=lambda done, total: None):

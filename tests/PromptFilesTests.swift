@@ -31,6 +31,17 @@ import Foundation
         }
         precondition(files.edited("edit-plan-examples.json") == nil)
         precondition(!PromptFiles.usable(" \n", file: "edit-plan.txt") && PromptFiles.usable("{不是 JSON 也可以}", file: "edit-plan.txt"))
-        print("Prompt files passed: all built-ins usable, built-in text not copied, private edits win, reset, unusable edits refused")
+        // Before an adopted rewrite replaces an edited copy, the copy is backed up; only the newest 10 stay.
+        let none = try files.backup("edit-rules.txt")
+        precondition(none == nil)
+        for i in 0..<12 {
+            try files.save("第 \(i) 版规则。\n", as: "edit-rules.txt")
+            let copy = try files.backup("edit-rules.txt", now: Date(timeIntervalSince1970: 1_800_000_000 + Double(i)))
+            precondition(copy.flatMap { try? String(contentsOf: $0, encoding: .utf8) } == "第 \(i) 版规则。\n")
+            precondition(copy.map { mode($0.path) } == 0o600)
+        }
+        let kept = try FileManager.default.contentsOfDirectory(atPath: edits.appendingPathComponent("backups").path).sorted()
+        precondition(kept.count == 10 && kept.first?.hasPrefix("edit-rules-") == true, "\(kept)")
+        print("Prompt files passed: all built-ins usable, built-in text not copied, private edits win, reset, unusable edits refused, backups before a rewrite")
     }
 }
