@@ -158,7 +158,9 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         downloadButton.isEnabled = controller.enabled && diarization.state == .on && !running && app.phase == .idle
         cloudBox.isHidden = cloudDisclosure.state != .on
         cloudDisclosure.image = NSImage(systemSymbolName:cloudDisclosure.state == .on ? "chevron.down" : "chevron.right",accessibilityDescription:nil)
-        cloudStatus.stringValue = controller.cloudConfigured ? "已配置：本地基础整理 + 云端深度整理" : "未配置：仅在本机生成基础纪要与脑图"
+        cloudStatus.stringValue = controller.strongCloud ? "使用「语音输入 → 专业配置 → 云端模型」里的强模型 \(CloudEditorSettings.load().strongName)：本地基础整理 + 云端深度整理。下面的单独服务不再使用。"
+            : controller.legacyCloudConfigured ? "已配置单独服务：本地基础整理 + 云端深度整理。也可以在「云端模型」里勾选会议，改用强模型。"
+            : "未配置：仅在本机生成基础纪要与脑图。可以在「语音输入 → 专业配置 → 云端模型」里勾选会议，使用强模型。"
         for v in [endpoint,model,key,writingStyle,saveCloud] as [NSControl] { v.isEnabled = controller.enabled && !running }
         terms.isEnabled = controller.enabled && !running; saveTermsButton.isEnabled = terms.isEnabled
         if controller.downloads.busy { status.stringValue = controller.downloads.message + "\n" + controller.downloads.progressText; progress.doubleValue = controller.downloads.fraction ?? 0 }
@@ -221,6 +223,13 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
     @objc private func saveCloudSettings() {
         do {
+            // With the strong model chosen for meetings only the writing style is saved here.
+            if controller.strongCloud && endpoint.stringValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
+                controller.settings["writing_style"] = String(writingStyle.stringValue.prefix(600))
+                try controller.saveSettings()
+                controller.showMessage("已保存写作要求。会议深度整理使用「云端模型」里的强模型。")
+                refreshState(); return
+            }
             let base = endpoint.stringValue.trimmingCharacters(in:.whitespacesAndNewlines).trimmingCharacters(in:CharacterSet(charactersIn:"/"))
             guard let url = URL(string:base), let host = url.host, url.scheme == "https" || (url.scheme == "http" && ["localhost","127.0.0.1","::1"].contains(host)),
                   url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { throw VoiceError.message("请输入有效的 HTTPS API 地址，不要将密钥写在 URL 中") }

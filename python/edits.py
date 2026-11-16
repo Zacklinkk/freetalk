@@ -531,7 +531,7 @@ def edit_as_repair(raw, old, new):
         end = after.index(phrase) + len(phrase)
         cue = fragment + after[:end]
         # The comma before an English cue belongs to it: ", sorry, four".
-        if not (correction_signal(cue) or correction_signal(raw[max(0, base + i + k - 2):base + i + k] + cue)):
+        if not (correction_signal(cue) or correction_signal(raw[max(0, base + i + k - 8):base + i + k] + cue)):
             return None
         return {'old': target, 'new': phrase, 'cue': cue}
     return None
@@ -562,7 +562,7 @@ def validate_repair(raw, item, patches):
         fragment=cue[offset:]
         marker=START_CUE.match(fragment) or EN_CUE.match(fragment)
         # The comma before the cue is part of it: ", sorry, four" is a correction, "Sorry, I" is not.
-        if not marker or not (correction_signal(fragment) or correction_signal(raw[max(0,cue_base+offset-2):cue_base+offset]+fragment)): continue
+        if not marker or not (correction_signal(fragment) or correction_signal(raw[max(0,cue_base+offset-8):cue_base+offset]+fragment)): continue
         if not cue_starts_clause(raw,cue_base+offset+len(fragment)-len(fragment.lstrip(' \t，,。.!！?？;；、')),fragment.lstrip(' \t，,。.!！?？;；、')): continue
         tail=fragment[marker.end():]
         for trim in range(common+1):
@@ -764,6 +764,36 @@ def restart_candidates(raw):
         shapes.append({'drop':[i-1],'keep':[i],'cue':cue})
         for item in shapes:
             if validate_restart(raw,units,item,[])[0] is not None:result.append(item);break
+    return result[:3]
+
+EN_REPAIR = re.compile(r"(?P<before>[^.!?;]*?)(?P<pause>,\s*)(?P<cue>(?:no\s*,?\s*wait|wait\s*,?\s*no|sorry|I mean|I meant|actually\s*,?\s*no|or rather)\s*,?\s*)(?P<after>[^,.;!?]+)", re.I)
+EN_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9'-]*")
+
+def english_repair_candidates(raw):
+    """Source-checked repairs for English self-corrections; the model still decides.
+
+    The words before the cue pair with the same number of words after it:
+    "at three, sorry, four o'clock" offers three → four. A word said on both
+    sides fixes the length: "five servers, I mean six servers" pairs two words,
+    "to Anna, no wait, to Maria" pairs "to Anna" with "to Maria".
+    """
+    result=[]
+    for m in EN_REPAIR.finditer(raw):
+        before=list(EN_WORD.finditer(m['before'])); after=list(EN_WORD.finditer(m['after']))
+        if not before or not after:continue
+        words_before=[w[0].lower() for w in before]; words_after=[w[0].lower() for w in after]
+        n=1
+        if words_before[-1] in words_after:n=words_after.index(words_before[-1])+1
+        elif words_after[0] in words_before[-4:]:n=len(words_before)-max(i for i,w in enumerate(words_before) if w==words_after[0])
+        if n>min(4,len(before),len(after)):continue
+        base=m.start('before')
+        old=raw[base+before[-n].start():base+before[-1].end()]
+        new=m['after'][after[0].start():after[n-1].end()]
+        end=m.end('after')
+        cue=raw[m.start('cue'):end]+raw[end:end+1] if raw[end:end+1] in '.!?' else raw[m.start('cue'):end]
+        item={'old':old,'new':new,'cue':cue.strip()}
+        candidates,failure=validate_repair(raw,item,[])
+        if candidates and not failure:result.append(item)
     return result[:3]
 
 def apply_plan(raw, plan, context):

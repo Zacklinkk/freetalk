@@ -81,8 +81,14 @@ extension AppDelegate {
         shortcutButton.state = UserDefaults.standard.object(forKey: "shortcutEnabled") as? Bool == false ? .off : .on
         let nearby = NSButton(checkboxWithTitle:"同时参考输入框周围的可见文字（仅本机）",target:self,action:#selector(windowContextChanged(_:)))
         nearby.state = UserDefaults.standard.bool(forKey:"windowContextEnabled") ? .on : .off
+        nearbyButton = nearby
+        let recognition = NSButton(checkboxWithTitle:"可见文字太少时识别窗口里的文字（仅本机；需要“屏幕录制”权限）",target:self,action:#selector(windowRecognitionChanged(_:)))
+        recognition.state = UserDefaults.standard.bool(forKey:"windowOCREnabled") ? .on : .off
+        let rich = NSButton(checkboxWithTitle:"列表和分段用富文本粘贴（支持的应用显示为真正的列表）",target:self,action:#selector(richTextChanged(_:)))
+        rich.state = UserDefaults.standard.object(forKey:"richTextPaste") as? Bool ?? true ? .on : .off
         let cleanupCard = card("文字整理", "只清理口误、改口和口水词，保留原意和细节。", views: [VoiceAppearance.form([("整理",cleanupPicker)])])
-        let detailCard = card("排版与上下文", views: [VoiceAppearance.form([("排版",layoutPicker)]),contextButton,nearby,label("处理结束后，位置提示会在5秒后消失。",size:12,color:.secondaryLabelColor)])
+        let detailCard = card("排版与上下文", views: [VoiceAppearance.form([("排版",layoutPicker)]),rich,contextButton,nearby,recognition,
+            label("辨词会参考光标前后的文字、选中的文字和网页域名。窗口文字识别只在本机运行，截取的画面不保存、不上传，识别出的文字和可见文字一样不发送到云端；密码管理器的窗口不读取。处理结束后，位置提示会在5秒后消失。",size:12,color:.secondaryLabelColor)])
         dictationShortcutButton = NSButton(title: hotkey.binding.display, target: self, action: #selector(recordDictationShortcut))
         dictationShortcutButton.bezelStyle = .rounded
         meetingShortcutButton = NSButton(title: hotkey.meetingBinding.display, target: self, action: #selector(recordMeetingShortcut))
@@ -93,6 +99,7 @@ extension AppDelegate {
             shortcutButton,
             row([label("语音输入",size:12), dictationShortcutButton]),
             row([label("会议录音",size:12), meetingShortcutButton, meetingFollowButton]),
+            makeTranslationControls(),
             row([button("测试快捷键",#selector(testShortcut)), button("恢复默认",#selector(resetHotkeys))]),
             shortcutTestLabel,
             label("测试只检查按键是否送达，不会录音。系统开关已打开但仍提示失效时，请到输入监控中移除后重新添加 freetalk。",size:12,color:.secondaryLabelColor)
@@ -100,7 +107,7 @@ extension AppDelegate {
         permissionsLabel = label("",size:11,color:.secondaryLabelColor)
         let permissionCard = card("系统权限与输入兼容性", views: [permissionsLabel,row([button("逐项授权引导",#selector(showPermissionGuide)),button("麦克风",#selector(requestMic)),button("辅助功能",#selector(requestAX)),button("输入监控",#selector(requestKeys))]),button("5秒后测试输入",#selector(testInsertion)),label("切回目标输入框，将插入“freetalk 输入测试”，不会发送。",size:12,color:.secondaryLabelColor)])
         // Everyday settings stay visible; the rest waits behind one disclosure row.
-        let advanced = DisclosureSection(title: "专业配置", subtitle: "录音时长、排版与上下文、整理提示词、云端整理、系统权限", key: "voiceAdvancedExpanded",
+        let advanced = DisclosureSection(title: "专业配置", subtitle: "录音时长、排版与上下文、整理提示词、云端模型、系统权限", key: "voiceAdvancedExpanded",
                                          views: [limitCard,detailCard,promptEditor.makeCard(),cloudEditor.makeCard(),permissionCard])
         // A missing permission needs the buttons in there; open it for this session only.
         if VoicePermissions.current(shortcutActive:hotkey.active, shortcutFailure:hotkey.failure).needsGuidance { advanced.reveal() }

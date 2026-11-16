@@ -71,5 +71,20 @@ class PromptTuningTests(unittest.TestCase):
         self.assertEqual(load_preferences(None), [])
 
 
+    def test_new_rules_are_adopted_only_when_nothing_got_worse(self):
+        from prompt_tuning import decide
+        row = lambda i, ok: {'id': i, 'exact': ok, 'checks': ok, 'group': 'g'}
+        before = [row('a', True), row('b', False)]
+        good = {'improved': 2, 'worse': 0, 'same': 1, 'accepted_changed': 0, 'accepted_total': 3}
+        self.assertTrue(decide(good, before, [row('a', True), row('b', True)])[0])
+        self.assertTrue(decide(good, before, before)[0])
+        # A case that matched before fails now, even if another one is fixed.
+        adopt, reason = decide(good, before, [row('a', False), row('b', True)])
+        self.assertFalse(adopt); self.assertIn('测试集', reason)
+        for change in [{'worse': 1}, {'accepted_changed': 1}, {'improved': 0}]:
+            with self.subTest(change=change):
+                self.assertFalse(decide({**good, **change}, before, before)[0])
+
+
 if __name__ == '__main__':
     unittest.main()

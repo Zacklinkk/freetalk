@@ -47,3 +47,38 @@ class DeepTests(unittest.TestCase):
    self.assertTrue(store.read(mid)['deep']);self.assertTrue((store.export(mid,Path(d)/'out')/'deep.md').exists())
    store.update(mid,deep_status='failed')
    self.assertIsNone(store.read(mid)['deep']);self.assertFalse((store.export(mid,Path(d)/'out2')/'deep.md').exists())
+ def test_strong_model_retries_a_server_error_once(self):
+  from cloud_client import CloudUnavailable
+  from meeting_models import strong_generator
+  replies=[CloudUnavailable('http_500'),'{"sections":[]}',CloudUnavailable('http_401'),CloudUnavailable('http_503'),CloudUnavailable('http_503')]
+  def client(messages,max_tokens,timeout):
+   reply=replies.pop(0)
+   if isinstance(reply,Exception):raise reply
+   return reply
+  with patch('cloud_client.chat_client',return_value=client),patch('meeting_models.time.sleep'):
+   write=strong_generator({'protocol':'anthropic','base_url':'https://example.test','model':'strong','api_key':'k'})
+   self.assertEqual(write('s','u'),'{"sections":[]}')
+   # A refused key is not retried; a second server error is reported.
+   for reason in ['http_401','http_503']:
+    with self.assertRaises(RuntimeError) as caught:write('s','u')
+    self.assertIn(reason,str(caught.exception))
+  self.assertEqual(replies,[])
+ def test_the_strong_model_writes_when_the_app_sends_it(self):
+  # The app sends its strong model; meeting-settings.json needs no service then.
+  with tempfile.TemporaryDirectory() as d:
+   store=MeetingStore(d);mid=store.create('test')['id']
+   for row in validate_segments([dict(start=0,end=5,text='保留12份报告。')]):store.append_segment(mid,row)
+   store.update(mid,transcript_complete=True)
+   atomic_json(Path(d)/'meeting-settings.json',dict(enabled=True))
+   sent=[]
+   def strong(settings):
+    sent.append(settings)
+    def write(system,user,**kw):
+     facts=json.loads(user)['facts'];return json.dumps({'sections':[dict(heading='资料',body='保留12份报告。',fact_ids=[facts[0]['id']])]})
+    return write
+   cloud={'protocol':'anthropic','base_url':'https://example.test','model':'strong','api_key':'k-secret'}
+   with patch('meeting_models.local_generator',return_value=lambda *a,**kw:'{}'),patch('meeting_models.strong_generator',side_effect=strong):
+    run_meeting({'cleanupModel':'local'},dict(support=d,meeting_id=mid,cloud=cloud),engine=SimpleNamespace(editor=SimpleNamespace(model=None,tokenizer=None)))
+   manifest=store.read(mid)['manifest']
+   self.assertEqual((manifest['deep_status'],manifest['deep_model']),('complete','strong'))
+   self.assertEqual(sent[0]['model'],'strong');self.assertNotIn('k-secret',json.dumps(manifest))

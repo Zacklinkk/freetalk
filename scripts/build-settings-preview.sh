@@ -24,7 +24,7 @@ PY
 sparkle_dir="$(bash scripts/prepare-sparkle.sh)"
 app_dir="$preview_dir/freetalk Settings Preview.app"
 swiftc -swift-version 5 -target "$(uname -m)-apple-macos14.0" "$preview_dir"/native/*.swift \
- -framework AppKit -framework AVFoundation -framework ApplicationServices -framework Carbon -framework CoreAudio -framework AudioToolbox -framework NaturalLanguage -framework Security -framework WebKit \
+ -framework AppKit -framework AVFoundation -framework ApplicationServices -framework Carbon -framework CoreAudio -framework AudioToolbox -framework NaturalLanguage -framework Security -framework WebKit -framework ScreenCaptureKit -framework Vision \
  -F "$sparkle_dir" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks -o "$app_dir/Contents/MacOS/freetalk"
 mkdir -p "$app_dir/Contents/Frameworks"
 ditto "$sparkle_dir/Sparkle.framework" "$app_dir/Contents/Frameworks/Sparkle.framework"

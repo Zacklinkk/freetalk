@@ -75,6 +75,7 @@ struct HotkeyBinding: Codable, Equatable {
 
     static let defaultDictation = HotkeyBinding(trigger: .modifierTap(.rightOption))
     static let defaultMeeting = HotkeyBinding(trigger: .chord(keyCode: 46, modifiers: [.rightOption]))
+    static let defaultTranslation = HotkeyBinding(trigger: .chord(keyCode: 17, modifiers: [.rightOption]))
 
     var display: String {
         switch trigger {
@@ -136,6 +137,12 @@ enum HotkeyValidation {
     static func meetingProblem(for binding: HotkeyBinding, dictation: HotkeyBinding) -> String? {
         if binding.isModifierTap { return "会议快捷键需要组合键，例如 右 Option + M" }
         return problem(for: binding, meeting: dictation)
+    }
+    /// The translation key may be a modifier tap or a chord, but not either other shortcut.
+    static func translationProblem(for binding: HotkeyBinding, dictation: HotkeyBinding, meeting: HotkeyBinding) -> String? {
+        if binding == dictation { return "翻译快捷键不能与语音输入快捷键相同" }
+        if binding == meeting { return "翻译快捷键不能与会议快捷键相同" }
+        return problem(for: binding, meeting: nil)
     }
     static func problem(for binding: HotkeyBinding, meeting: HotkeyBinding?) -> String? {
         if let meeting, binding == meeting { return "会议快捷键不能与语音输入快捷键相同" }
@@ -244,15 +251,20 @@ final class GlobalHotkey {
     private var dictationTap = ModifierTapState()
     private var dictationChord = HotkeyChordState()
     private var meetingChord = HotkeyChordState()
+    private var translationTap = ModifierTapState()
+    private var translationChord = HotkeyChordState()
     private var functionHeld = false
     private var modifierBegan: TimeInterval?
     private var lastUnmatchedTest: TimeInterval = 0
 
     private(set) var binding: HotkeyBinding
     private(set) var meetingBinding: HotkeyBinding
+    /// nil when the translation shortcut is switched off.
+    private(set) var translationBinding: HotkeyBinding?
     private(set) var failure: String?
     var onToggle: (() -> Void)?
     var onMeeting: (() -> Void)?
+    var onTranslate: (() -> Void)?
     var onEscape: (() -> Void)?
     var onTestEvent: ((HotkeyTestEvent) -> Void)?
     var testing = false
@@ -269,6 +281,11 @@ final class GlobalHotkey {
     func update(binding: HotkeyBinding, meetingBinding: HotkeyBinding) {
         self.binding = binding
         self.meetingBinding = meetingBinding
+        reset()
+    }
+
+    func update(translation: HotkeyBinding?) {
+        translationBinding = translation
         reset()
     }
 
@@ -318,6 +335,8 @@ final class GlobalHotkey {
         dictationTap = ModifierTapState()
         dictationChord = HotkeyChordState()
         meetingChord = HotkeyChordState()
+        translationTap = ModifierTapState()
+        translationChord = HotkeyChordState()
         functionHeld = false
         modifierBegan = nil
     }
@@ -343,6 +362,16 @@ final class GlobalHotkey {
         if type == .flagsChanged {
             guard let modifier = HotkeyModifier(rawValue: code) else { return false }
             let down = held.contains(modifier)
+            if let target = translationBinding?.modifierTap, modifier == target {
+                dictationTap.cancel()
+                let fire = translationTap.flags(keyCode: code, down: down, otherModifiers: !held.subtracting([target]).isEmpty, now: now, target: target)
+                if fire {
+                    if testing { report(HotkeyTestEvent(description: "翻译键 \(target.display)", matched: false, elapsed: nil)) }
+                    else { DispatchQueue.main.async { self.onTranslate?() } }
+                }
+                return false
+            }
+            translationTap.cancel()
             guard let target = binding.modifierTap, modifier == target else {
                 dictationTap.cancel()
                 if testing && down { report(HotkeyTestEvent(description: modifier.display, matched: false, elapsed: nil)) }
@@ -366,7 +395,7 @@ final class GlobalHotkey {
         guard type == .keyDown || type == .keyUp else { return false }
         let down = type == .keyDown
         let repeated = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-        if down { dictationTap.keyDown() }
+        if down { dictationTap.keyDown(); translationTap.keyDown() }
 
         let meeting = meetingChord.event(binding: meetingBinding, keyCode: code, down: down, held: held, repeated: repeated)
         if meeting.fire {
@@ -377,6 +406,15 @@ final class GlobalHotkey {
             }
         }
         if meeting.consume { return true }
+
+        if let translation = translationBinding, !translation.isModifierTap {
+            let pressed = translationChord.event(binding: translation, keyCode: code, down: down, held: held, repeated: repeated)
+            if pressed.fire {
+                if testing { report(HotkeyTestEvent(description: "翻译键 \(translation.display)", matched: false, elapsed: nil)) }
+                else { DispatchQueue.main.async { self.onTranslate?() } }
+            }
+            if pressed.consume { return true }
+        }
 
         if !binding.isModifierTap {
             let dictation = dictationChord.event(binding: binding, keyCode: code, down: down, held: held, repeated: repeated)
@@ -573,22 +611,35 @@ struct InputSnapshot {
     func unchanged() -> Bool { (try? resolve()) != nil }
     func failureReason() -> String? { do { _ = try resolve(); return nil } catch { return error.localizedDescription } }
     func currentAnchor() -> CGRect? { guard let now = try? resolveState() else { return anchor }; return Self.caretRect(now.element, now.range) ?? axRect(now.element) ?? anchor }
+    var bundle: String { NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "" }
+    /// A style hint from the app: terminal, development, conversation or general.
+    static func scene(for bundle: String) -> String {
+        let id = bundle.lowercased()
+        if ["terminal","iterm"].contains(where:id.contains) { return "terminal" }
+        if ["codex","comate","vscode","xcode","cursor"].contains(where:id.contains) { return "development" }
+        if ["doubao","chat","hi.mac","wechat"].contains(where:id.contains) { return "conversation" }
+        return "general"
+    }
+    /// The web page's domain, never its path or query (which can hold tokens).
+    var domain: String {
+        guard let url = URL(string: identity.document), ["http", "https"].contains(url.scheme ?? ""), let host = url.host else { return "" }
+        return host
+    }
+    /// Text before the caret, the selection and text after it, for disambiguation.
     func context(enabled: Bool) -> [String: Any] {
         guard enabled else { return [:] }
         let text = value as NSString
-        let start = max(0, range.location - 900)
-        let end = min(text.length, range.location + range.length + 100)
-        let application = NSRunningApplication(processIdentifier:pid)
-        let bundle = application?.bundleIdentifier ?? ""
-        let scene: String
-        if ["terminal","iterm"].contains(where:bundle.lowercased().contains) { scene = "terminal" }
-        else if ["codex","comate","vscode","xcode","cursor"].contains(where:bundle.lowercased().contains) { scene = "development" }
-        else if ["doubao","chat","hi.mac","wechat"].contains(where:bundle.lowercased().contains) { scene = "conversation" }
-        else { scene = "general" }
-        return ["app":name,"scene":scene,"window_title":identity.windowTitle,
-                "nearby":UserDefaults.standard.bool(forKey:"windowContextEnabled") ? nearbyText() : "",
+        let start = max(0, range.location - 1000)
+        let selectionEnd = range.location + range.length
+        let bundle = self.bundle
+        let scene = Self.scene(for: bundle)
+        let visible = UserDefaults.standard.bool(forKey:"windowContextEnabled") && WindowText.allowed(bundle: bundle)
+        return ["app":name,"scene":scene,"window_title":identity.windowTitle,"domain":domain,
+                "nearby":visible ? nearbyText() : "",
                 "initial": text.substring(to: min(text.length, 500)),
-                "latest": text.substring(with: NSRange(location: start, length: min(1000, end - start)))]
+                "latest": text.substring(with: NSRange(location: start, length: range.location - start)),
+                "selected": text.substring(with: NSRange(location: range.location, length: min(2000, range.length))),
+                "after": text.substring(with: NSRange(location: selectionEnd, length: min(500, text.length - selectionEnd)))]
     }
     private func nearbyText() -> String {
         // Bounded to the selected input's containing pane and current window.
@@ -656,6 +707,20 @@ enum InsertionCheck {
         return (false, "different")
     }
 
+    /// After a rich paste the editor draws list numbers itself, so its text has
+    /// the item text without "1. ". True when every line shows, in order, and
+    /// the field changed.
+    static func showsLines(_ lines: [String], in observed: String, before: String) -> Bool {
+        let o = normalize(observed)
+        guard !lines.isEmpty, o != normalize(before) else { return false }
+        var index = o.startIndex
+        for line in lines {
+            guard let found = o.range(of: normalize(line), range: index..<o.endIndex) else { return false }
+            index = found.upperBound
+        }
+        return true
+    }
+
     /// Whether the caret is where the user left it: the same selected text and
     /// the same `context` UTF-16 units before and after it. Changes elsewhere in
     /// the field do not count. Invisible-character differences are ignored.
@@ -688,24 +753,25 @@ final class TextInserter {
     private(set) var lastTarget: InputSnapshot?
     private var pendingRestore: (() -> Void)?
     func restoreBeforeExit() { pendingRestore?(); pendingRestore = nil }
-    func insert(_ text: String, into target: InputSnapshot?, completion: @escaping (Bool, String) -> Void) {
+    /// `html` (see RichText) goes on the pasteboard next to the plain text, for apps that paste rich text.
+    func insert(_ text: String, into target: InputSnapshot?, html: String? = nil, completion: @escaping (Bool, String) -> Void) {
         guard !busy else { completion(false, "上一次粘贴仍在完成，结果已保留"); return }
         guard let target = target else { completion(false, "开始录音时未锁定可编辑输入框，结果已保留"); return }
         busy = true; lastTarget = nil
-        attempt(text, target: target, retries: 3, completion: completion)
+        attempt(text, html: html, target: target, retries: 3, completion: completion)
     }
-    private func attempt(_ text: String, target: InputSnapshot, retries: Int, completion: @escaping (Bool, String) -> Void) {
+    private func attempt(_ text: String, html: String?, target: InputSnapshot, retries: Int, completion: @escaping (Bool, String) -> Void) {
         let resolved: AXUIElement, state: InputSnapshot
         do { let now = try target.resolveState(); resolved = now.element; state = target.updated(element: now.element, value: now.value, range: now.range) }
         catch {
             // Short accessibility re-layout failures can recover; never move the user's caret.
             if retries > 0 && error.localizedDescription.contains("暂时") {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.attempt(text, target: target, retries: retries-1, completion: completion) }; return
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.attempt(text, html: html, target: target, retries: retries-1, completion: completion) }; return
             }
             busy = false; completion(false, "未自动输入：\(error.localizedDescription)；结果已保留"); return
         }
         guard CGEventSource.flagsState(.combinedSessionState).intersection([.maskCommand,.maskControl,.maskAlternate,.maskShift]).isEmpty else {
-            if retries > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.attempt(text, target: target, retries: retries-1, completion: completion) }; return }
+            if retries > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.attempt(text, html: html, target: target, retries: retries-1, completion: completion) }; return }
             busy = false; completion(false, "未自动输入：仍有修饰键按下；结果已保留"); return
         }
         let clipboard = NSPasteboard.general
@@ -730,7 +796,11 @@ final class TextInserter {
             let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else {
             busy = false; completion(false, "无法发送粘贴操作，结果已保留"); return
         }
-        clipboard.clearContents(); let wrote = clipboard.setString(text, forType: .string)
+        clipboard.clearContents()
+        let item = NSPasteboardItem()
+        var wrote = item.setString(text, forType: .string)
+        if let html = html { wrote = item.setString(html, forType: .html) && wrote }
+        wrote = clipboard.writeObjects([item]) && wrote
         let ourChange = clipboard.changeCount
         func restore() {
             if clipboard.changeCount == ourChange {
@@ -757,8 +827,12 @@ final class TextInserter {
         func verify() {
             // Reacquire the AX node after web editors re-render their document.
             let nodes = [resolved, focusedElement(target.pid)].compactMap { $0 }
-            let checks = nodes.map { InsertionCheck.check(original: state.value, inserted: text, expected: expected,
-                                                         observed: axAttribute($0, kAXValueAttribute) as? String) }
+            let values = nodes.map { axAttribute($0, kAXValueAttribute) as? String }
+            var checks = values.map { InsertionCheck.check(original: state.value, inserted: text, expected: expected, observed: $0) }
+            if html != nil, !checks.contains(where: { $0.verified }),
+               values.contains(where: { $0.map { InsertionCheck.showsLines(RichText.visibleLines(text), in: $0, before: state.value) } ?? false }) {
+                checks.insert((true, "rich_lines"), at: 0)
+            }
             let verified = checks.contains { $0.verified }
             if !verified && Date().timeIntervalSince(began) < 3 && clipboard.changeCount == ourChange {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: verify); return

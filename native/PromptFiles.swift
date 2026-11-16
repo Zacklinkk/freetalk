@@ -13,7 +13,12 @@ struct PromptFiles {
         ("restart-plan-examples.json", "整句撤回示例", "JSON 数组，用户（user）与助手（assistant）交替。"),
         ("filler-selection.txt", "口水词选择", "只需要判断口水词去留时使用的短提示词。"),
         ("prompt-tuning.txt", "规则优化", "「整理规则优化」发给云端模型的提示词。"),
+        ("translation.txt", "翻译输入", "翻译输入时发给翻译模型的系统提示词；目标语言随原文一起发送。"),
     ]
+
+    /// Prompts the cleanup eval set can measure; the others are saved without it.
+    static let cleanup: Set<String> = ["edit-rules.txt", "edit-plan.txt", "edit-plan-examples.json", "restart-plan.txt",
+                                       "restart-plan-examples.json", "filler-selection.txt"]
 
     struct Invalid: LocalizedError {
         let message: String

@@ -83,6 +83,29 @@ def cloud_generator(base_url, model, api_key):
     return generate
 
 
+def strong_generator(settings):
+    """Meeting writing on the app's strong cloud model, either protocol.
+
+    `settings` is the payload the app builds from 云端模型 → 强模型. Failures
+    raise RuntimeError with a reason code only, never the response body.
+    """
+    from cloud_client import CloudUnavailable, chat_client
+    client = chat_client(settings.get('protocol', 'openai'), settings.get('base_url', ''), settings.get('model', ''),
+                         settings.get('api_key', ''), settings.get('headers'))
+    timeout = min(600.0, max(30.0, float(settings.get('timeout_seconds', 240))))
+    def generate(system, user, max_tokens=2200):
+        messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
+        # Gateways return an occasional 5xx; this runs in the background, so try once more.
+        for attempt in range(2):
+            try:
+                return client(messages, max_tokens, timeout)
+            except CloudUnavailable as error:
+                if attempt or not (error.reason.startswith('http_5') or error.reason == 'network'):
+                    raise RuntimeError(f'Cloud writing unavailable: {error.reason}') from None
+                time.sleep(3)
+    return generate
+
+
 def diarize(path, model_path, emit):
     import mlx.core as mx
     import soundfile as sf
