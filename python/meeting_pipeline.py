@@ -86,7 +86,12 @@ def validate_segments(rows):
 
 
 def run_meeting(config, payload, engine=None, emit=lambda value: None):
-    from meeting_models import local_generator, cloud_generator, diarize
+    """Transcribe, summarize and (optionally) write up one meeting.
+
+    The optional cloud layer uses payload['cloud'] (the app's strong model) or,
+    for the CLI, the service saved in meeting-settings.json with payload['api_key'].
+    """
+    from meeting_models import local_generator, cloud_generator, strong_generator, diarize
     store = MeetingStore(payload['support'])
     meeting_id = payload['meeting_id']
     directory = store.directory(meeting_id)
@@ -127,11 +132,14 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
         summary_model = Path(config['cleanupModel']).name
         timings['summary_model_setup_seconds'] = round(time.monotonic()-started,3)
         from meeting_deep import configured as deep_configured
+        strong = payload.get('cloud') if isinstance(payload.get('cloud'), dict) else None
+        deep_on = bool(strong) or deep_configured(settings)
+        deep_model = (strong or settings).get('model') if deep_on else None
         # Basic minutes are always local; record the optional cloud layer separately.
         store.update(meeting_id, status='processing', stage='preparing', error=None,
                      summary_provider='local', summary_model=summary_model,
-                     deep_provider='cloud' if deep_configured(settings) else 'none',
-                     deep_model=settings.get('model') if deep_configured(settings) else None,
+                     deep_provider='cloud' if deep_on else 'none',
+                     deep_model=deep_model,
                      requested_audio_retention=retain)
         if payload.get('transcript_path'):
             progress(stage='import', message='导入带时间戳的转写')
@@ -228,16 +236,16 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
             minutes['warnings'].append('部分片段包含多个说话人或重叠，未把每个词强行分配给某个人。')
         source_digest = render_bundle(store, meeting_id, minutes, tree)
         # A cloud failure must not discard or mark the usable local bundle as failed.
-        from meeting_deep import configured, deepen, render_deep
+        from meeting_deep import deepen, render_deep
         deep_status = 'not_configured'
-        if configured(settings) and minutes['facts']:
+        if deep_on and minutes['facts']:
             progress(stage='deep', message='基础纪要已完成，开始可选的云端深度整理')
             store.update(meeting_id, stage='deep', deep_status='processing')
             stage_start = time.monotonic()
             try:
-                cloud = cloud_generator(settings['base_url'], settings['model'], payload.get('api_key', ''))
+                cloud = strong_generator(strong) if strong else cloud_generator(settings['base_url'], settings['model'], payload.get('api_key', ''))
                 enhanced = deepen(minutes, cloud, settings.get('writing_style', ''), progress)
-                enhanced['model'] = settings['model']
+                enhanced['model'] = deep_model
                 render_deep(directory, enhanced)
                 deep_status = 'complete'
                 store.update(meeting_id, deep_error=None)
@@ -261,8 +269,9 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
         # covers interrupts (KeyboardInterrupt, SystemExit), which used to leave
         # the manifest stuck at status=processing forever.
         message = str(exc)[:400] if isinstance(exc, Exception) else '处理被中断，可以选择“继续处理”。'
-        if payload.get('api_key'):
-            message = message.replace(payload['api_key'], '[redacted]')
+        for secret in [payload.get('api_key')] + ([(payload.get('cloud') or {}).get('api_key')] if isinstance(payload.get('cloud'), dict) else []):
+            if secret:
+                message = message.replace(secret, '[redacted]')
         try:
             store.update(meeting_id, status='failed', error=message, audio_retained=audio_path.exists(),
                          **({'deep_status': 'failed'} if store.manifest(meeting_id).get('deep_status') == 'processing' else {}))

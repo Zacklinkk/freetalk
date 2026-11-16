@@ -11,9 +11,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EDITABLE = ('edit-rules.txt', 'edit-plan.txt', 'edit-plan-examples.json', 'restart-plan.txt',
-            'restart-plan-examples.json', 'filler-selection.txt', 'prompt-tuning.txt')
+            'restart-plan-examples.json', 'filler-selection.txt', 'prompt-tuning.txt', 'translation.txt')
 # The directory holding edited copies; the worker sets it from config['supportPath'].
 overrides = None
+# An edit being checked against the eval set before it is saved (name → text).
+pending = {}
 
 
 def builtin(name):
@@ -32,6 +34,8 @@ def valid_turns(text):
 
 def edited(name):
     """The user's usable copy of prompts/<name>, or None."""
+    if name in pending and name in EDITABLE:
+        return pending[name]
     if not overrides or name not in EDITABLE:
         return None
     try:

@@ -18,6 +18,7 @@ swiftc -swift-version 5 -O -target "arm64-apple-macos$deployment_target" \
   "$project_dir"/native/*.swift \
   -framework AppKit -framework AVFoundation -framework ApplicationServices \
   -framework Carbon -framework CoreAudio -framework AudioToolbox -framework NaturalLanguage -framework Security -framework WebKit \
+  -framework ScreenCaptureKit -framework Vision \
   -F "$sparkle_dir" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   -o "$app_dir/Contents/MacOS/freetalk"
 cp "$project_dir/native/Info.plist" "$app_dir/Contents/Info.plist"

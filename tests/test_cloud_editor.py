@@ -211,10 +211,10 @@ class CloudRoutingTests(unittest.TestCase):
         self.assertIn('VISIBLE-WINDOW-SECRET', e.local_calls[0])
 
     def test_terms_and_spellings_from_visible_text_stay_local_too(self):
-        from context import normalize_context
+        from context import add_visible_text, normalize_context
         cloud = remote(json.dumps(PLAN, ensure_ascii=False))
-        context = normalize_context({'window_title': '周报', 'latest': '用 LoRA 训练',
-                                     'nearby': '老陈：Secretproj 回测跑完了，夏普比率 1.8'})
+        context = add_visible_text(normalize_context({'window_title': '周报', 'latest': '用 LoRA 训练'}),
+                                   '老陈：Secretproj 回测跑完了，夏普比率 1.8')
         editor(cloud).edit('这个下普比率，不对，十个样本还行。', context, policy='always')
         self.assertNotIn('Secretproj', cloud.sent[0])
         self.assertNotIn('夏普比率', cloud.sent[0])

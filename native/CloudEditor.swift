@@ -58,6 +58,9 @@ struct CloudEditorSettings {
     var serviceReady: Bool { !baseURL.isEmpty && !model.isEmpty && Self.hasSecret(baseURL) }
     /// Any feature that sends text to the service is switched on.
     var anyFeature: Bool { enabled || translation || meetings || tuning || nightly }
+    /// Features that run without a click need the key read at launch; the
+    /// others read it when the user starts them.
+    var readsKeyAtLaunch: Bool { enabled || translation || nightly }
 
     /// The same endpoint rules as the worker, checked before anything is saved.
     static func validated(baseURL raw: String) throws -> String {

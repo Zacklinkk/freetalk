@@ -114,7 +114,7 @@ final class CloudEditorPanel: NSObject {
     @objc func featuresChanged() {
         var s = CloudEditorSettings.load(); readFeatures(into: &s); s.save()
         status.stringValue = Self.summary(s)
-        if s.anyFeature && s.serviceReady { CloudCredentialStore.prefetch(s.baseURL) }
+        if s.readsKeyAtLaunch && s.serviceReady { CloudCredentialStore.prefetch(s.baseURL) }
         app.cloudSettingsChanged()
     }
 

@@ -30,7 +30,8 @@ class VoiceQualityTests(unittest.TestCase):
   self.assertEqual(normalize_spelling('K一点六。',ctx)[0],'K一点六。')
  def test_context_bounded_and_not_injected_into_output(self):
   ctx=normalize_context({'app':'x'*200,'nearby':'SFT '*1000,'window_title':'RL training'})
-  self.assertEqual(len(ctx['app']),100);self.assertEqual(len(ctx['nearby']),1800)
+  # Accessibility text plus recognized window text; the model sees the first 1800 characters.
+  self.assertEqual(len(ctx['app']),100);self.assertEqual(len(ctx['nearby']),4000)
   self.assertIn('SFT',[x['term'] for x in ctx['terms']])
   self.assertEqual(preclean('请保留所有原文。',ctx)[0],'请保留所有原文。')
 
