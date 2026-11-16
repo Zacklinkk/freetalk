@@ -22,6 +22,15 @@ import Foundation
         let payload = settings.payload(with: full)
         precondition(payload["api_key"] as? String == "k-test" && (payload["headers"] as? [String: String]) == full.headers)
         precondition(CloudEditorSettings.describe(fallback: "keychain_pending").contains("钥匙串"))
-        print("Cloud credentials passed: single-item round trip, legacy bare key, header filtering, payload without Keychain access")
+        // A caller that arrives while a read is in flight still gets an answer
+        // (the tuning button waited forever when the launch read was pending).
+        let missing = "https://example.invalid/v1-\(UUID().uuidString)"
+        var answers = 0
+        CloudCredentialStore.prefetch(missing) { precondition($0 == nil); answers += 1 }
+        CloudCredentialStore.prefetch(missing) { precondition($0 == nil); answers += 1 }
+        let deadline = Date().addingTimeInterval(10)
+        while answers < 2 && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        precondition(answers == 2, "every prefetch caller gets a completion")
+        print("Cloud credentials passed: single-item round trip, legacy bare key, header filtering, payload without Keychain access, concurrent prefetch callers")
     }
 }

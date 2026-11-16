@@ -21,6 +21,11 @@ swiftc -swift-version 5 -O -target "arm64-apple-macos$deployment_target" \
   -F "$sparkle_dir" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   -o "$app_dir/Contents/MacOS/freetalk"
 cp "$project_dir/native/Info.plist" "$app_dir/Contents/Info.plist"
+# The update page shows what this version changed.
+version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$project_dir/native/Info.plist")"
+if [ -f "$project_dir/docs/releases/$version.md" ]; then
+  cp "$project_dir/docs/releases/$version.md" "$app_dir/Contents/Resources/release-notes.md"
+fi
 mkdir -p "$app_dir/Contents/Frameworks"
 rm -rf "$app_dir/Contents/Frameworks/Sparkle.framework"
 ditto "$sparkle_dir/Sparkle.framework" "$app_dir/Contents/Frameworks/Sparkle.framework"

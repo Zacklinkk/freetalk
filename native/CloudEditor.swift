@@ -154,21 +154,27 @@ enum CloudCredentialStore {
     private static let lock = NSLock()
     private static var cache: [String: CloudCredentials] = [:]
     private static var loading: Set<String> = []
+    private static var waiting: [String: [(CloudCredentials?) -> Void]] = [:]
 
     static func cached(_ endpoint: String) -> CloudCredentials? { lock.lock(); defer { lock.unlock() }; return cache[endpoint] }
     static var isLoading: Bool { lock.lock(); defer { lock.unlock() }; return !loading.isEmpty }
 
     /// Start a background read unless one is running or the value is cached.
+    /// Every caller's completion runs on the main thread, including callers
+    /// that arrive while an earlier read is still waiting on a Keychain prompt.
     static func prefetch(_ endpoint: String, completion: ((CloudCredentials?) -> Void)? = nil) {
         lock.lock()
         if let value = cache[endpoint] { lock.unlock(); completion.map { done in DispatchQueue.main.async { done(value) } }; return }
+        if let completion = completion { waiting[endpoint, default: []].append(completion) }
         let started = loading.insert(endpoint).inserted
         lock.unlock()
         guard started else { return }
         DispatchQueue.global(qos: .userInitiated).async {
             let value = read(endpoint)
-            lock.lock(); loading.remove(endpoint); if let value = value { cache[endpoint] = value }; lock.unlock()
-            if let done = completion { DispatchQueue.main.async { done(value) } }
+            lock.lock(); loading.remove(endpoint); if let value = value { cache[endpoint] = value }
+            let callers = waiting.removeValue(forKey: endpoint) ?? []
+            lock.unlock()
+            if !callers.isEmpty { DispatchQueue.main.async { callers.forEach { $0(value) } } }
         }
     }
 
