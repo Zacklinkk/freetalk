@@ -100,8 +100,8 @@ extension AppDelegate {
         permissionsLabel = label("",size:11,color:.secondaryLabelColor)
         let permissionCard = card("系统权限与输入兼容性", views: [permissionsLabel,row([button("逐项授权引导",#selector(showPermissionGuide)),button("麦克风",#selector(requestMic)),button("辅助功能",#selector(requestAX)),button("输入监控",#selector(requestKeys))]),button("5秒后测试输入",#selector(testInsertion)),label("切回目标输入框，将插入“freetalk 输入测试”，不会发送。",size:12,color:.secondaryLabelColor)])
         // Everyday settings stay visible; the rest waits behind one disclosure row.
-        let advanced = DisclosureSection(title: "专业配置", subtitle: "录音时长、排版与上下文、云端整理、系统权限", key: "voiceAdvancedExpanded",
-                                         views: [limitCard,detailCard,cloudEditor.makeCard(),permissionCard])
+        let advanced = DisclosureSection(title: "专业配置", subtitle: "录音时长、排版与上下文、整理提示词、云端整理、系统权限", key: "voiceAdvancedExpanded",
+                                         views: [limitCard,detailCard,promptEditor.makeCard(),cloudEditor.makeCard(),permissionCard])
         // A missing permission needs the buttons in there; open it for this session only.
         if VoicePermissions.current(shortcutActive:hotkey.active, shortcutFailure:hotkey.failure).needsGuidance { advanced.reveal() }
         addSettingsPage(settingsPage("语音输入", subtitle: "说完即写入当前光标位置，保持你的表达。", cards:[statusCard,micCard,shortcutCard,cleanupCard,advanced],scrollable:true))

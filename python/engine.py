@@ -24,14 +24,11 @@ ROOT = Path(__file__).resolve().parents[1]
 def prompt(name, preferences=()):
     """A prompt file with shared fragments expanded (`{{edit-rules}}` → prompts/edit-rules.txt).
 
-    The edit and restart prompts share their repair/edit/layout rules; keeping
-    them in one file stops the two copies drifting apart. Adopted user
-    preferences (see prompt_tuning) follow the built-in rules.
+    The user's edited copy is used when there is one (see prompt_files).
+    Adopted user preferences (see prompt_tuning) follow the built-in rules.
     """
-    text = (ROOT / 'prompts' / name).read_text()
-    for marker in set(re.findall(r'\{\{([a-z-]+)\}\}', text)):
-        text = text.replace('{{' + marker + '}}', (ROOT / 'prompts' / (marker + '.txt')).read_text().removesuffix('\n'))
-    return with_preferences(text, preferences)
+    from prompt_files import expand
+    return with_preferences(expand(name), preferences)
 
 
 def with_preferences(text, preferences):
@@ -100,25 +97,26 @@ class Editor:
         self.set_preferences(preferences)
 
     def set_preferences(self, preferences):
-        """Build the system prompts and their warmed caches for these user preferences."""
+        """Build the system prompts and their warmed caches for these user preferences.
+
+        Also rereads the prompt files, so it applies a prompt the user just edited.
+        """
+        from prompt_files import examples
         self.preferences = list(preferences)
         mode = self.mode
         prompt_file = 'edit-plan.txt' if mode == 'edits' else 'cleanup.txt'
         example_file = 'edit-plan-examples.json' if mode == 'edits' else 'examples.json'
-        self.base = [{"role": "system", "content": prompt(prompt_file, self.preferences)}]
-        examples = json.loads((ROOT / 'prompts' / example_file).read_text())
-        # Keep positive and negative examples; avoid nine competing mini-dialogues
-        # that the small model can accidentally continue instead of editing the input.
-        self.base += sum((examples[i:i+2] for i in (0,8,12,14,18)), []) if mode == 'edits' else examples
+        # A few positive and negative examples only: nine competing mini-dialogues
+        # tempt the small model to continue one instead of editing the input.
+        self.base = [{"role": "system", "content": prompt(prompt_file, self.preferences)}] + examples(example_file)
         self.prefix, self.cache = self.prepare_prefix(self.base)
-        from filler_selection import PROMPT
-        self.filler_base = [{'role':'system','content':with_preferences(PROMPT, self.preferences)}]
+        self.filler_base = [{'role':'system','content':prompt('filler-selection.txt', self.preferences)}]
         self.filler_prefix, self.filler_cache = self.prepare_prefix(self.filler_base)
         # Isolate the new discourse operation from the established edit prompt.
         # Both caches share the same weights and are warmed at startup, not on stop.
         if mode == 'edits':
             self.restart_base = [{"role":"system","content":prompt('restart-plan.txt', self.preferences)}]
-            self.restart_base += json.loads((ROOT / 'prompts' / 'restart-plan-examples.json').read_text())
+            self.restart_base += examples('restart-plan-examples.json')
             self.restart_prefix, self.restart_cache = self.prepare_prefix(self.restart_base)
 
     def prepare_prefix(self, base):
@@ -369,6 +367,9 @@ class Engine:
         budget = min(int(config.get('residentGiB', 5) * 2**30), recommended)
         mx.set_wired_limit(budget)
         self.asr = load_model(config["asrModel"])
+        import prompt_files
+        # Edited prompts from Settings live next to the adopted preferences.
+        prompt_files.overrides = Path(config["supportPath"]) / "prompts" if config.get("supportPath") else None
         self.editor = Editor(config["cleanupModel"], emit, preferences=load_preferences(config.get("supportPath")))
         self.reset({})
         self.asr.generate(np.zeros(16000, dtype=np.float32), temperature=0, max_tokens=16)

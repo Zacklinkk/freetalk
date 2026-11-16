@@ -18,6 +18,21 @@ import Foundation
         precondition(reloaded.entries.first?.insertionStatus == "已插入" && reloaded.entries.last?.id == "5")
         precondition(reloaded.entries.first?.cleanupRoute == "dictation_review" && reloaded.entries.first?.appliedEdits == 2 && reloaded.entries.first?.rejectedEdits == 1)
         precondition(reloaded.entries.last?.cleanupRoute == nil && reloaded.entries.last?.appliedEdits == nil)
+        // Learning reports land on the entry later and survive a reload; old entries say nothing.
+        precondition(reloaded.entries.last?.learningSummary == nil)
+        reloaded.update("504") { $0.learned = [] }
+        precondition(reloaded.entries[0].learningSummary == "未学习：插入后没有改动")
+        reloaded.update("504") { $0.learningStop = "90 秒内没有改字" }
+        precondition(reloaded.entries[0].learningSummary == "未学习：90 秒内没有改字")
+        reloaded.update("504") { $0.editedText = "文本504（改）" }
+        precondition(reloaded.entries[0].learningSummary?.hasPrefix("未学习：改动不像改字") == true)
+        reloaded.update("504") { $0.learned = ["已学会 麦克 → Mac（识别）", "已记入整理规则优化的样例"] }
+        reloaded.update("no-such-entry") { $0.editedText = "x" }
+        let learned = VoiceHistoryStore(directory: directory)
+        precondition(learned.entries[0].editedText == "文本504（改）" && learned.entries[0].learningSummary == "已学会 麦克 → Mac（识别）；已记入整理规则优化的样例")
+        precondition(learned.entries.count == 500 && !learned.entries.contains { $0.id == "no-such-entry" })
+        var off = learned.entries[1]; off.learningStop = "自动学习已关闭"
+        precondition(off.learningSummary == "未学习：自动学习已关闭")
         let permissions = try FileManager.default.attributesOfItem(atPath: directory.appendingPathComponent("history.json").path)[.posixPermissions] as! NSNumber
         precondition(permissions.intValue == 0o600)
         let corrupt = Data("do not overwrite corrupt history".utf8)
@@ -25,6 +40,6 @@ import Foundation
         let bad = VoiceHistoryStore(directory: directory); bad.upsert(latest)
         let preserved = try Data(contentsOf: directory.appendingPathComponent("history.json"))
         precondition(bad.error != nil && preserved == corrupt)
-        print("History passed: legacy migration, 505 -> newest 500, update without duplication, reload, 0600, corrupt file preserved")
+        print("History passed: legacy migration, 505 -> newest 500, update without duplication, reload, learning notes on saved entries, 0600, corrupt file preserved")
     }
 }

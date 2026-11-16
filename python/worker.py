@@ -82,6 +82,11 @@ def main():
                 from prompt_tuning import clean_rules
                 engine.editor.set_preferences(clean_rules(command.get("rules")))
                 result = {"rules": engine.editor.preferences}
+            elif action == "reload_prompts":
+                # Rereads the prompt files after the user edited one in Settings.
+                from prompt_files import EDITABLE, edited
+                engine.editor.set_preferences(engine.editor.preferences)
+                result = {"edited": [name for name in EDITABLE if edited(name) is not None]}
             elif action == 'meeting':
                 from meeting_pipeline import run_meeting
                 result = run_meeting(config, command, engine=engine, emit=emit)
