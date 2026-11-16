@@ -207,6 +207,11 @@ class Editor:
             restarts=restart_candidates(raw) if restart_mode else []
             if restarts:
                 tail += '已核对原文范围的整句撤回候选（仅当语义上确属同一要求的撤回重述时选择，编号照抄）：' + json.dumps(restarts,ensure_ascii=False) + '\n'
+            if 'self_correction' in signals:
+                from edits import english_repair_candidates
+                corrections = english_repair_candidates(raw)
+                if corrections:
+                    tail += '已核对原文的英文改口候选（确属口头改口时照抄到repairs）：' + json.dumps(corrections, ensure_ascii=False) + '\n'
             repeats = repetition_candidates(raw)
             if repeats:
                 tail += '相邻重复起头候选（逐项判断是否为口吃；没有新增信息且不是强调时放入edits，不能漏掉后续内容）：' + json.dumps(repeats,ensure_ascii=False) + '\n'

@@ -122,6 +122,22 @@ class EnglishRepairCueTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(correction_signal(text))
 
+    def test_candidates_pair_the_corrected_words(self):
+        from edits import english_repair_candidates
+        for raw, old, new, expected in [
+            ("Let's meet at three, sorry, four o'clock.", 'three', 'four', "Let's meet at four o'clock."),
+            ('We need five servers, I mean six servers for the demo.', 'five servers', 'six servers', 'We need six servers for the demo.'),
+            ('Send it to Anna, no wait, to Maria.', 'to Anna', 'to Maria', 'Send it to Maria.'),
+            ('Ship it on Friday, no wait, Monday.', 'Friday', 'Monday', 'Ship it on Monday.'),
+        ]:
+            with self.subTest(raw=raw):
+                [item] = english_repair_candidates(raw)
+                self.assertEqual((item['old'], item['new']), (old, new))
+                self.assertEqual(apply_plan(raw, {'repairs': [item], 'edits': [], 'breaks': [], 'bullets': []}, {})[0], expected)
+        for raw in ['Yes, sorry, I missed it.', 'There is no wait time.', '先用十个样本，不对，十二个。']:
+            with self.subTest(raw=raw):
+                self.assertEqual(english_repair_candidates(raw), [])
+
 
 class AliasHygieneTests(unittest.TestCase):
     """Aliases with punctuation or whitespace can never match a transcript."""
