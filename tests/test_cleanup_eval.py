@@ -56,6 +56,12 @@ def replay(case, reply=None):
 class CleanupEvalReplayTests(unittest.TestCase):
     cases = load()
 
+    def test_the_app_bundle_ships_the_eval_set(self):
+        # The worker reads evals/ next to python/ when tuning rules or checking a prompt.
+        build = (Path(__file__).resolve().parents[1] / 'scripts' / 'build.sh').read_text()
+        for directory in ('python', 'prompts', 'evals'):
+            self.assertIn(f'ditto "$project_dir/{directory}" "$app_dir/Contents/Resources/{directory}"', build)
+
     def test_case_ids_are_unique_and_variants_name_their_case(self):
         ids = [c['id'] for c in self.cases]
         self.assertEqual(len(ids), len(set(ids)))

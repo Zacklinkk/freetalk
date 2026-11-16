@@ -11,6 +11,9 @@ final class PromptTuningPanel: NSObject {
     private let rules = NSTextField(wrappingLabelWithString: "")
     private var run: NSButton!, adopt: NSButton!, discard: NSButton!, reset: NSButton!, clear: NSButton!
     private var proposal: [String] = []
+    /// A rewritten rule text with the preferences merged in, waiting for the user.
+    private var rewrite: String?
+    private var pending: Bool { !proposal.isEmpty || rewrite != nil }
     private var nightlyTimer: Timer?
     /// The worker is replaying cases; dictation waits until it finishes.
     private(set) var busy = false
@@ -40,15 +43,15 @@ final class PromptTuningPanel: NSObject {
         summary.stringValue = "已记录 \(count) 条插入后又被你改动的口述" + (active.isEmpty ? "，当前使用默认规则。" : "，当前使用 \(active.count) 条整理偏好：\n" + active.map { "· " + $0 }.joined(separator: "\n")) + night
         let cloud = CloudEditorSettings.load()
         let ready = cloud.serviceReady && cloud.tuning
-        run.isEnabled = !busy && !reading && count >= 3 && ready && app.worker.ready && app.phase == .idle && !app.meetings.busy && proposal.isEmpty
-        if !busy && !reading && proposal.isEmpty {
+        run.isEnabled = !busy && !reading && count >= 3 && ready && app.worker.ready && app.phase == .idle && !app.meetings.busy && !pending
+        if !busy && !reading && !pending {
             if count < 3 { result.stringValue = "至少需要 3 条记录。" }
             else if !cloud.serviceReady { result.stringValue = "需要先在「语音输入 → 专业配置 → 云端模型」里填好服务、模型和密钥。" }
             else if !cloud.tuning { result.stringValue = "「云端模型」里没有勾选“整理规则优化”。" }
             else if result.stringValue.hasPrefix("至少") || result.stringValue.hasPrefix("需要先") || result.stringValue.hasPrefix("「云端模型」") { result.stringValue = "" }
         }
-        adopt.isHidden = proposal.isEmpty; discard.isHidden = proposal.isEmpty; rules.isHidden = proposal.isEmpty
-        reset.isHidden = active.isEmpty || !proposal.isEmpty
+        adopt.isHidden = !pending; discard.isHidden = !pending; rules.isHidden = !pending
+        reset.isHidden = active.isEmpty || pending
         clear.isEnabled = count > 0 && !busy
     }
 
@@ -72,7 +75,7 @@ final class PromptTuningPanel: NSObject {
 
     private var idle: Bool {
         app.worker.ready && app.phase == .idle && !app.meetings.busy && !app.inserter.busy && !app.modelSetup.busy
-            && !app.appUpdater.installing && !app.promptEditor.checking && !busy && !reading && proposal.isEmpty
+            && !app.appUpdater.installing && !app.promptEditor.checking && !busy && !reading && !pending
     }
 
     private func tune(_ payload: [String: Any], model: String, automatic: Bool) {
@@ -84,6 +87,7 @@ final class PromptTuningPanel: NSObject {
         app.worker.onTuneProgress = { [weak self] event in
             guard let self = self, let done = event["completed"] as? Int, let total = event["total"] as? Int else { return }
             switch event["stage"] as? String {
+            case "rewrite": self.result.stringValue = "整理偏好已有 8 条以上，正在请强模型把它们并入整理规则…"
             case "replay": self.result.stringValue = "正在本机用新旧规则重跑记录 \(done)/\(total)…"
             case "eval-before": self.result.stringValue = "正在用现有规则跑测试集 \(done)/\(total)…"
             case "eval-after": self.result.stringValue = "正在用新规则跑测试集 \(done)/\(total)…"
@@ -102,18 +106,23 @@ final class PromptTuningPanel: NSObject {
                 if automatic { self.report("未完成：\(reason)") }
             case .success(let value):
                 let proposed = value["rules"] as? [String] ?? []
+                let rewritten = value["prompt"] as? String
+                let merged = value["merged"] as? [String] ?? []
                 let reason = value["reason"] as? String ?? ""
-                if proposed.isEmpty {
+                if proposed.isEmpty && rewritten == nil {
                     self.result.stringValue = "强模型没有找到可靠的共性问题，规则保持不变。"
                     if automatic { self.report("没有找到可靠的共性问题，规则不变") }
                 } else if value["adopt"] as? Bool == true {
-                    self.save(proposed, model: model, message: "已自动采用：\(reason)。下次口述生效。")
-                    if automatic { self.report("已自动采用 \(proposed.count) 条整理偏好（\(reason)）") }
+                    let done = rewritten == nil ? "已自动采用：\(reason)。下次口述生效。"
+                        : "已把 \(merged.count) 条整理偏好并入整理规则：\(reason)。新规则可在「整理提示词」查看或恢复默认，下次口述生效。"
+                    self.save(proposed, prompt: rewritten, model: model, message: done)
+                    if automatic { self.report(rewritten == nil ? "已自动采用 \(proposed.count) 条整理偏好（\(reason)）" : "已把 \(merged.count) 条整理偏好并入整理规则（\(reason)）") }
                 } else if automatic {
                     self.report("未采用：\(reason)")
                 } else {
-                    self.proposal = proposed
-                    self.rules.stringValue = "建议的整理偏好：\n" + proposed.map { "· " + $0 }.joined(separator: "\n") + Self.details(value)
+                    self.proposal = proposed; self.rewrite = rewritten
+                    self.rules.stringValue = (rewritten == nil ? "建议的整理偏好：\n" + proposed.map { "· " + $0 }.joined(separator: "\n")
+                        : "建议把这些整理偏好并入整理规则（采用后可在「整理提示词」查看全文）：\n" + merged.map { "· " + $0 }.joined(separator: "\n")) + Self.details(value)
                     self.result.stringValue = "未自动采用：\(reason)。可以查看下面的变化后决定。"
                 }
             }
@@ -134,8 +143,10 @@ final class PromptTuningPanel: NSObject {
         return "\n\n" + lines.joined(separator: "\n")
     }
 
-    private func save(_ proposed: [String], model: String, message: String) {
+    /// Save adopted preferences, or a rewritten rule text with the preferences emptied.
+    private func save(_ proposed: [String], prompt: String? = nil, model: String, message: String) {
         do {
+            if let prompt = prompt { try app.promptEditor.adopt(prompt, as: "edit-rules.txt") }
             try CleanupPreferences.save(proposed, model: model, support: app.support)
             app.worker.request("set_preferences", ["rules": proposed])
             result.stringValue = message
@@ -179,11 +190,11 @@ final class PromptTuningPanel: NSObject {
     }
 
     @objc private func adoptRules() {
-        save(proposal, model: CloudEditorSettings.load().strongName, message: "已采用，下次口述生效。")
-        proposal = []; rules.stringValue = ""; refresh()
+        save(proposal, prompt: rewrite, model: CloudEditorSettings.load().strongName, message: "已采用，下次口述生效。")
+        proposal = []; rewrite = nil; rules.stringValue = ""; refresh()
     }
     @objc private func clearCases() { store.clear(); result.stringValue = "已清除本机记录。"; refresh() }
-    @objc private func discardRules() { proposal = []; rules.stringValue = ""; result.stringValue = "已放弃，规则保持不变。"; refresh() }
+    @objc private func discardRules() { proposal = []; rewrite = nil; rules.stringValue = ""; result.stringValue = "已放弃，规则保持不变。"; refresh() }
     @objc private func resetRules() {
         try? FileManager.default.removeItem(at: CleanupPreferences.file(app.support))
         app.worker.request("set_preferences", ["rules": [String]()])

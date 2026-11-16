@@ -81,9 +81,69 @@ class PromptTuningTests(unittest.TestCase):
         # A case that matched before fails now, even if another one is fixed.
         adopt, reason = decide(good, before, [row('a', False), row('b', True)])
         self.assertFalse(adopt); self.assertIn('测试集', reason)
-        for change in [{'worse': 1}, {'accepted_changed': 1}, {'improved': 0}]:
+        for change in [{'worse': 1}, {'accepted_changed': 1}]:
             with self.subTest(change=change):
                 self.assertFalse(decide({**good, **change}, before, before)[0])
+        # Not worse is enough, as the user asked: a merge that changes nothing is adopted.
+        self.assertTrue(decide({**good, 'improved': 0, 'same': 3}, before, before)[0])
+
+    def test_a_rewrite_keeps_the_plan_format(self):
+        from prompt_tuning import consolidate, rewrite_problem
+        rules = prompt_files_source('edit-rules.txt')
+        self.assertIsNone(rewrite_problem(rules, rules + '\n- 保留句末语气词。'))
+        self.assertEqual(rewrite_problem(rules, ''), 'empty_rewrite')
+        self.assertEqual(rewrite_problem(rules, rules[:200]), 'rewrite_length')
+        self.assertEqual(rewrite_problem(rules, rules.replace('cue', '线索')), 'rewrite_drops_fields')
+        sent = []
+        def complete(messages, max_tokens, timeout):
+            sent.append(json.loads(messages[1]['content']))
+            return json.dumps({'rules': rules + '\n- 保留句末语气词。'}, ensure_ascii=False)
+        self.assertTrue(consolidate(complete, rules, ['保留句末语气词。']).endswith('保留句末语气词。\n'))
+        self.assertEqual(sent[0]['preferences'], ['保留句末语气词。'])
+        with self.assertRaises(CloudUnavailable):
+            consolidate(lambda *a: json.dumps({'rules': '只删口水词。'}), rules, ['x'])
+
+    def test_enough_preferences_are_merged_into_the_rules(self):
+        """At the cap the strong model rewrites the rules; the replay and the eval
+        set run with the rewrite active, and nothing stays applied afterwards."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import prompt_files
+        import worker
+        from cleanup_eval import load
+        gt = {c['raw']: c['gt'] for c in load()}
+        preferences = [f'偏好{i}：保留原文语气' for i in range(8)]
+        calls = []
+        class Editor:
+            preferences, remote = [], None
+            def set_preferences(self, rules):
+                self.preferences = list(rules)
+            def edit(self, raw, context, timeout, policy):
+                rewritten = 'REWRITTEN' in prompt_files.source('edit-rules.txt')
+                calls.append((rewritten, tuple(self.preferences)))
+                return (gt.get(raw, raw + '吧') if rewritten else raw), {}
+        def client(messages, max_tokens, timeout):
+            if 'preferences' in json.loads(messages[1]['content']) and 'rules' in json.loads(messages[1]['content']):
+                return json.dumps({'rules': prompt_files.builtin('edit-rules.txt') + '\nREWRITTEN'})
+            return json.dumps({'preferences': preferences}, ensure_ascii=False)
+        engine = SimpleNamespace(editor=Editor(), config={})
+        cases = [{'raw': '然后再看看结果', 'inserted': '再看看结果', 'final': '然后再看看结果吧'}]
+        with patch('cloud_client.chat_client', return_value=client):
+            result = worker.tune_prompt(engine, {'cloud': {}, 'cases': cases, 'accepted': []}, lambda value: None)
+        self.assertEqual((result['rules'], result['merged']), ([], preferences))
+        self.assertTrue(result['prompt'].endswith('REWRITTEN\n'))
+        self.assertTrue(result['adopt'], result['reason'])
+        self.assertEqual(result['eval']['after'], result['eval']['total'])
+        # The rewrite ran without the appended preferences, and was removed afterwards.
+        self.assertIn((True, ()), calls)
+        self.assertNotIn((True, tuple(preferences)), calls)
+        self.assertEqual(prompt_files.pending, {})
+        self.assertEqual(engine.editor.preferences, [])
+
+
+def prompt_files_source(name):
+    import prompt_files
+    return prompt_files.builtin(name)
 
 
 if __name__ == '__main__':

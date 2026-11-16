@@ -107,6 +107,14 @@ final class PromptEditorPanel: NSObject {
         }
     }
 
+    /// Save a rule text that rule tuning adopted. The previous edited copy, if
+    /// any, goes to backups/; the built-in text stays available through 恢复默认.
+    func adopt(_ text: String, as name: String) throws {
+        try files.backup(name)
+        try files.save(text, as: name)
+        if name == file && editor.string == loaded { load(index) }
+    }
+
     @objc private func keepEdit() {
         guard let refused = refused, refused.file == file, idle else { return }
         store(refused.text, as: refused.file, note: "测试集结果变差，按你的选择保存")
