@@ -48,13 +48,23 @@ def problem(source, translated, target):
         return 'untranslated'
     # A month number may become a month name (11月 → November).
     numbers = [m[0] for m in re.finditer(r'\d+(?:\.\d+)*', source) if not (target not in ('zh', 'ja') and source[m.end():m.end() + 1] == '月')]
-    found = re.findall(r'\d+(?:\.\d+)*', translated)
-    if any(n not in found for n in numbers):
+    if any(n not in values(translated) for n in numbers):
         return 'number_changed'
     for literal in re.findall(r'`[^`]+`|https?://[^\s，。]+|[\w.+-]+@[\w-]+\.[\w.]+', source):
         if literal not in translated:
             return 'literal_changed'
     return None
+
+
+def values(text):
+    """The numbers in `text`, written in digits or in Chinese: Q3 may become 第三季度."""
+    from numerals import integer
+    found = set(re.findall(r'\d+(?:\.\d+)*', text))
+    for run in re.findall(r'[零〇一二两三四五六七八九十百千万]+', text):
+        value = integer(run)
+        if value is not None:
+            found.add(str(int(value)))
+    return found
 
 
 def translate(text, target, cloud=None, local=None, timeout=20):

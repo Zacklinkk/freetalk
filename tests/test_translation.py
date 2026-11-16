@@ -37,8 +37,10 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(problem(source, '把 v2.3.1 部署到 https://a.test/x，下午3点前完成。', 'en'), 'untranslated')
         self.assertEqual(problem(source, '', 'en'), 'empty')
         self.assertEqual(problem('好的。', 'Sure. ' * 40, 'en'), 'length')
-        # A month number may become its name.
+        # A month number may become its name, and a number may be written in Chinese.
         self.assertIsNone(problem('11月见。', 'See you in November.', 'en'))
+        self.assertIsNone(problem('It should cover Q3 numbers.', '应涵盖第三季度的数据。', 'zh'))
+        self.assertEqual(problem('It should cover Q3 numbers.', '应涵盖季度数据。', 'zh'), 'number_changed')
 
     def test_cloud_first_then_local(self):
         cloud_calls, local_calls = [], []

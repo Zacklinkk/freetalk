@@ -94,10 +94,15 @@ def strong_generator(settings):
                          settings.get('api_key', ''), settings.get('headers'))
     timeout = min(600.0, max(30.0, float(settings.get('timeout_seconds', 240))))
     def generate(system, user, max_tokens=2200):
-        try:
-            return client([{'role': 'system', 'content': system}, {'role': 'user', 'content': user}], max_tokens, timeout)
-        except CloudUnavailable as error:
-            raise RuntimeError(f'Cloud writing unavailable: {error.reason}') from None
+        messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
+        # Gateways return an occasional 5xx; this runs in the background, so try once more.
+        for attempt in range(2):
+            try:
+                return client(messages, max_tokens, timeout)
+            except CloudUnavailable as error:
+                if attempt or not (error.reason.startswith('http_5') or error.reason == 'network'):
+                    raise RuntimeError(f'Cloud writing unavailable: {error.reason}') from None
+                time.sleep(3)
     return generate
 
 

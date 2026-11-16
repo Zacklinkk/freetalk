@@ -47,6 +47,22 @@ class DeepTests(unittest.TestCase):
    self.assertTrue(store.read(mid)['deep']);self.assertTrue((store.export(mid,Path(d)/'out')/'deep.md').exists())
    store.update(mid,deep_status='failed')
    self.assertIsNone(store.read(mid)['deep']);self.assertFalse((store.export(mid,Path(d)/'out2')/'deep.md').exists())
+ def test_strong_model_retries_a_server_error_once(self):
+  from cloud_client import CloudUnavailable
+  from meeting_models import strong_generator
+  replies=[CloudUnavailable('http_500'),'{"sections":[]}',CloudUnavailable('http_401'),CloudUnavailable('http_503'),CloudUnavailable('http_503')]
+  def client(messages,max_tokens,timeout):
+   reply=replies.pop(0)
+   if isinstance(reply,Exception):raise reply
+   return reply
+  with patch('cloud_client.chat_client',return_value=client),patch('meeting_models.time.sleep'):
+   write=strong_generator({'protocol':'anthropic','base_url':'https://example.test','model':'strong','api_key':'k'})
+   self.assertEqual(write('s','u'),'{"sections":[]}')
+   # A refused key is not retried; a second server error is reported.
+   for reason in ['http_401','http_503']:
+    with self.assertRaises(RuntimeError) as caught:write('s','u')
+    self.assertIn(reason,str(caught.exception))
+  self.assertEqual(replies,[])
  def test_the_strong_model_writes_when_the_app_sends_it(self):
   # The app sends its strong model; meeting-settings.json needs no service then.
   with tempfile.TemporaryDirectory() as d:
