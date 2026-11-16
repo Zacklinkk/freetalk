@@ -42,6 +42,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var preparedDeviceKey: String?
     var preparationRequest = UUID()
     var currentEntry: VoiceHistoryEntry?
+    /// The history entry the correction learner is watching; its findings are written there.
+    var learningEntryID: String?
     var hudTimer: Timer?
     var hudAnchor: CGRect?
     var targetIssue: String?
@@ -70,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let hotkeyTester = HotkeyTestController()
     lazy var cloudEditor = CloudEditorPanel(app: self)
     lazy var promptTuning = PromptTuningPanel(app: self)
+    lazy var promptEditor = PromptEditorPanel(app: self)
     var learningStatus: NSTextField?
     var lastHotkeyAttempt = Date.distantPast
     var deviceList: [MicDevice] = []
@@ -159,16 +162,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let repeated = change.reinforced ? " · 第 \(change.alias.count) 次" : ""
             self.learningHUD.showLearning(title:count == 1 ? "已学会 \(change.alias.term)" : "已学会 \(count) 处改字",detail:"\(source)：\(change.alias.heard) → \(change.alias.term)\(repeated) · 下次生效",anchor:anchor)
             self.learningStatus?.stringValue = "最近一次：已学会「\(change.alias.heard) → \(change.alias.term)」（\(source)阶段）"
+            self.annotateHistory(self.learningEntryID) { $0.learned = ($0.learned ?? []) + ["已学会 \(change.alias.heard) → \(change.alias.term)（\(source)）"] }
         }
         correctionLearner.onStop = { [weak self] reason in
             self?.learningStatus?.stringValue = "最近一次学习检查结束：\(reason)"
+            self?.annotateHistory(self?.learningEntryID) { $0.learningStop = reason }
         }
         correctionLearner.onCleanupEdit = { [weak self] in
             self?.learningStatus?.stringValue = "最近一次：你改动了整理写出的文字，已记下，可用于优化整理规则"
         }
         correctionLearner.onFinish = { [weak self] raw, inserted, final in
-            guard let self = self, self.promptTuning.store.record(raw: raw, inserted: inserted, final: final) else { return }
-            self.promptTuning.refresh()
+            guard let self = self else { return }
+            let recorded = self.promptTuning.store.record(raw: raw, inserted: inserted, final: final)
+            // A newline or invisible character an editor adds is not an edit.
+            let changed = InsertionCheck.normalize(final) != InsertionCheck.normalize(inserted)
+            self.annotateHistory(self.learningEntryID) {
+                if changed { $0.editedText = final }
+                if recorded { $0.learned = ($0.learned ?? []) + ["已记入整理规则优化的样例"] }
+            }
+            if recorded { self.promptTuning.refresh() }
         }
         correctionLearner.onError = { [weak self] error in self?.setStatus("词库未更新：\(error)") }
         learningHUD.onUndo = { [weak self] in
@@ -727,7 +739,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         // their value a moment later. The learner stops itself, with a
                         // recorded reason, if the field stays unreadable.
                         if self.learningButton.state == .on, let target = self.target, success || message.hasPrefix("粘贴已发送") {
+                            self.learningEntryID = self.currentEntry?.id
+                            self.annotateHistory(self.learningEntryID) { $0.learned = [] }
                             self.correctionLearner.start(target:self.inserter.lastTarget ?? target,inserted:self.lastText,raw:self.lastRaw,store:self.correctionStore)
+                        } else if self.learningButton.state == .off {
+                            self.annotateHistory(self.currentEntry?.id) { $0.learningStop = "自动学习已关闭" }
                         }
                         self.refreshDevices()
                     }
@@ -803,6 +819,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     @objc func showHistory() { historyWindow.show() }
+    /// Record what learning did with a dictation on its history row. The row may
+    /// still be the current one, which is saved again later, so update both copies.
+    func annotateHistory(_ id: String?, _ change: (inout VoiceHistoryEntry) -> Void) {
+        guard let id = id else { return }
+        if currentEntry?.id == id { change(&currentEntry!) }
+        historyStore.update(id, change)
+        recentHistoryView?.refresh()
+        if historyWindow.window.isVisible { historyWindow.refresh() }
+    }
     @objc func showVocabulary() { vocabularyWindow.show() }
     @objc func showCorrections() { correctionsWindow.show() }
     @objc func copyResult() {

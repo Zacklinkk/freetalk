@@ -104,7 +104,9 @@ private final class HistoryPreviewCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func configure(_ entry: VoiceHistoryEntry) {
         self.entry = entry; copy.title = "复制"
-        metadata.stringValue = [Self.date.string(from: entry.createdAt), entry.targetApp].filter { !$0.isEmpty }.joined(separator: " · ")
+        let learned = !(entry.learned ?? []).isEmpty
+        metadata.stringValue = [Self.date.string(from: entry.createdAt), entry.targetApp,
+                                entry.editedText == nil ? "" : "插入后改过", learned ? "已用于学习" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
         preview.stringValue = entry.text.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
         copy.setAccessibilityLabel("复制 \(Self.date.string(from: entry.createdAt)) 的转写")
     }

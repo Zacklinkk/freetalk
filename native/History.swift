@@ -19,6 +19,21 @@ struct VoiceHistoryEntry: Codable, Identifiable {
     /// How a paste was confirmed (exact/normalized/contains_insert) or why not
     /// (no_value/unchanged/different/cleared). Never contains text.
     var insertionCheck: String? = nil
+    /// What the user left in place of the inserted text after editing it; nil if unchanged.
+    var editedText: String? = nil
+    /// What learning took from this dictation, e.g. "已学会 麦克 → Mac（识别）".
+    /// nil when no one watched the field after insertion; empty when nothing was learned.
+    var learned: [String]? = nil
+    /// Why watching the field ended, or why it never started.
+    var learningStop: String? = nil
+
+    /// One line for the history detail answering "did this teach anything?"; nil for old entries.
+    var learningSummary: String? {
+        guard let learned = learned else { return learningStop.map { "未学习：\($0)" } }
+        if !learned.isEmpty { return learned.joined(separator: "；") }
+        if editedText != nil { return "未学习：改动不像改字，或只是在后面补充了内容" }
+        return "未学习：" + (learningStop ?? "插入后没有改动")
+    }
 }
 
 final class VoiceHistoryStore {
@@ -59,6 +74,11 @@ final class VoiceHistoryStore {
         else { entries.insert(entry, at: 0) }
         entries = Array(entries.prefix(Self.limit)); persist()
     }
+    /// Change one saved entry in place, e.g. when learning reports on it later. Unknown ids are ignored.
+    func update(_ id: String, _ change: (inout VoiceHistoryEntry) -> Void) {
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
+        change(&entries[index]); persist()
+    }
     private func persist() {
         guard writable else { return }
         do {
@@ -74,7 +94,7 @@ final class HistoryWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate 
     let store: VoiceHistoryStore
     let window: NSWindow
     let table = NSTableView(), text = NSTextView(), search = NSSearchField(), info = NSTextField(wrappingLabelWithString: "")
-    let mode = NSSegmentedControl(labels: ["整理结果", "原始转写"], trackingMode: .selectOne, target: nil, action: nil)
+    let mode = NSSegmentedControl(labels: ["整理结果", "原始转写", "你改后的文字"], trackingMode: .selectOne, target: nil, action: nil)
     private var rows: [VoiceHistoryEntry] = []
     init(store: VoiceHistoryStore) {
         self.store = store
@@ -84,7 +104,7 @@ final class HistoryWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false
         window.contentView!.addSubview(stack)
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 18), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -18), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 18), stack.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -18)])
-        search.placeholderString = "搜索原稿或整理结果"; search.setAccessibilityLabel("搜索转写历史"); search.target = self; search.action = #selector(refresh)
+        search.placeholderString = "搜索原稿、整理结果或你改后的文字"; search.setAccessibilityLabel("搜索转写历史"); search.target = self; search.action = #selector(refresh)
         stack.addArrangedSubview(search); search.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         for (key, title, width) in [("time","时间",145.0),("app","目标应用",110.0),("text","内容",410.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(key)); column.title = title; column.width = width; table.addTableColumn(column)
@@ -111,7 +131,7 @@ final class HistoryWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate 
     private func reloadRows(selecting entryID: String?) {
         let selected = entryID ?? (rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil)
         let q = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        rows = store.entries.filter { q.isEmpty || $0.text.localizedCaseInsensitiveContains(q) || $0.raw.localizedCaseInsensitiveContains(q) }
+        rows = store.entries.filter { q.isEmpty || $0.text.localizedCaseInsensitiveContains(q) || $0.raw.localizedCaseInsensitiveContains(q) || ($0.editedText?.localizedCaseInsensitiveContains(q) ?? false) }
         table.reloadData()
         if !rows.isEmpty {
             let index = rows.firstIndex(where: { $0.id == selected }) ?? 0
@@ -133,10 +153,14 @@ final class HistoryWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate 
     @objc func selectionChanged() {
         guard rows.indices.contains(table.selectedRow) else { text.string = ""; info.stringValue = store.error ?? "没有匹配的记录 · 最多保留500条，自动淘汰最旧记录"; return }
         let entry = rows[table.selectedRow]
-        text.string = mode.selectedSegment == 1 ? entry.raw : entry.text
+        mode.setEnabled(entry.editedText != nil, forSegment: 2)
+        if mode.selectedSegment == 2 && entry.editedText == nil { mode.selectedSegment = 0 }
+        text.string = [entry.text, entry.raw, entry.editedText ?? entry.text][mode.selectedSegment]
         info.stringValue = "\(store.entries.count)/500条 · \(entry.cleanupStatus) · \(entry.insertionStatus)\n" + String(format: "录音 %.1f秒 · 停止到文字 %.2f秒 · 整理 %.2f秒", entry.audioSeconds, entry.stopToTextSeconds, entry.cleanupSeconds)
         if entry.modelUsed, let count=entry.appliedEdits { info.stringValue += " · 词句修改 \(count) 处" }
         if let count=entry.rejectedEdits, count>0 { info.stringValue += " · 保守拦截 \(count) 处" }
+        if entry.editedText != nil { info.stringValue += "\n插入后你改过这段文字，可切换到「你改后的文字」查看" }
+        if let learning = entry.learningSummary { info.stringValue += "\n学习：" + learning }
         info.toolTip = [entry.cleanupRoute,entry.cleanupReason].compactMap { $0 }.joined(separator:" · ")
         if let error = store.error { info.stringValue += "\n" + error }
     }
