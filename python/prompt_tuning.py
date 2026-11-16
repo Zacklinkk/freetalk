@@ -3,8 +3,9 @@
 The user's own edits after insertion are the evidence: what the recognizer
 heard (raw), what cleanup inserted (cleaned) and what the user left (final).
 A strong cloud model reads those cases and writes a few general preferences.
-Nothing changes until the preferences are replayed through the local editor
-and the user adopts them; the existing safety checks still apply afterwards.
+The local editor then replays the cases and the eval set (evals/) with the old
+and the new preferences; the new ones are adopted only if neither got worse
+(see decide). The existing safety checks still apply afterwards.
 The optimizer's prompt is prompts/prompt-tuning.txt.
 """
 import json
@@ -65,6 +66,29 @@ def distance(a, b):
         for j, y in enumerate(b, 1):
             prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (x != y))
     return row[-1]
+
+
+def decide(scores, eval_before, eval_after):
+    """Whether to adopt new preferences without asking, and why.
+
+    The replay must move at least one case toward what the user kept, move
+    none away and leave every untouched dictation as it was; the eval set must
+    lose no case it matched before. Anything else is shown, not adopted.
+    """
+    from cleanup_eval import regressions, summary
+    lost = regressions(eval_before, eval_after)
+    before, after = summary(eval_before)['exact'], summary(eval_after)['exact']
+    if lost:
+        return False, f'测试集有 {len(lost)} 条变差'
+    if after < before:
+        return False, f'测试集通过数从 {before} 降到 {after}'
+    if scores['worse']:
+        return False, f'{scores["worse"]} 条记录离你改后的文字更远'
+    if scores['accepted_changed']:
+        return False, f'{scores["accepted_changed"]} 条你没改过的口述结果会变化'
+    if not scores['improved']:
+        return False, '没有记录变得更接近你改后的文字'
+    return True, f'{scores["improved"]} 条记录更接近你改后的文字，测试集 {before} → {after} 条通过'
 
 
 def evaluate(edit, cases, accepted, old_rules, new_rules, progress=lambda done, total: None):

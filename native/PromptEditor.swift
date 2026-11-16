@@ -82,7 +82,7 @@ final class PromptEditorPanel: NSObject {
         guard idle else { status.stringValue = "正在口述或处理，结束后再保存。"; return }
         let text = editor.string, name = file
         do { try PromptFiles.validate(text, file: name) } catch { status.stringValue = error.localizedDescription; return }
-        if text == (files.builtin(name) ?? "") || !app.worker.ready { store(text, as: name); return }
+        if text == (files.builtin(name) ?? "") || !app.worker.ready || !PromptFiles.cleanup.contains(name) { store(text, as: name); return }
         checking = true; saveButton.isEnabled = false; keepButton.isHidden = true
         status.stringValue = "正在用测试集检查修改（约需几分钟，期间暂停口述）…"
         app.worker.onTuneProgress = { [weak self] event in

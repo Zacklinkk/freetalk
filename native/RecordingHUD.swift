@@ -147,12 +147,13 @@ final class RecordingHUD: NSObject {
         spectrum.active=recording; spectrum.level=level
         action.isEnabled=recording
     }
-    func finish(success:Bool,message:String,notice:String?=nil) {
+    /// `notice` explains a fallback (cloud to local, translation not done); `done` replaces "已输入" on success.
+    func finish(success:Bool,message:String,notice:String?=nil,done:String?=nil) {
         hideTimer?.invalidate(); finished=true; actionMode = .copy
         resetWarning()
-        title.stringValue=success ? (notice == nil ? "已输入" : "已输入 · 本地整理") : "结果已保留"; clock.stringValue=""
+        title.stringValue=success ? (done ?? (notice == nil ? "已输入" : "已输入 · 本地整理")) : "结果已保留"; clock.stringValue=""
         spectrum.isHidden=true; icon.isHidden=false
-        icon.image=NSImage(systemSymbolName:notice != nil ? "exclamationmark.icloud" : success ? "checkmark.circle.fill" : "doc.on.clipboard",accessibilityDescription:notice)
+        icon.image=NSImage(systemSymbolName:notice != nil ? (done == nil ? "exclamationmark.icloud" : "exclamationmark.triangle") : success ? "checkmark.circle.fill" : "doc.on.clipboard",accessibilityDescription:notice)
         let detail = notice.map { "\($0)" } ?? message
         destination.stringValue=detail; destination.toolTip=notice.map { "\($0)\n\(message)" } ?? message
         action.title=""; action.image=NSImage(systemSymbolName:"doc.on.doc",accessibilityDescription:"复制结果"); action.setAccessibilityLabel("复制结果"); action.isEnabled=true

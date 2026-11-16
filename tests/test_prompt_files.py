@@ -87,5 +87,37 @@ class PromptFileTests(unittest.TestCase):
         self.assertEqual(listed, list(prompt_files.EDITABLE))
 
 
+class PromptCheckTests(unittest.TestCase):
+    """Settings checks an edited prompt against the eval set before saving it."""
+
+    def test_the_edit_is_tried_without_being_saved(self):
+        from types import SimpleNamespace
+        import worker
+        seen = []
+        class Editor:
+            preferences, remote = [], None
+            def set_preferences(self, rules):
+                seen.append(prompt_files.source('filler-selection.txt'))
+            def edit(self, raw, context, timeout, policy):
+                # This stub "fixes" a case only while the edited prompt is active.
+                fixed = prompt_files.source('filler-selection.txt') == 'EDITED'
+                return (case_gt[raw] if fixed else raw), {}
+        from cleanup_eval import load
+        cases = load()
+        case_gt = {c['raw']: c['gt'] for c in cases}
+        engine = SimpleNamespace(editor=Editor(), config={})
+        with tempfile.TemporaryDirectory() as d:
+            prompt_files.overrides = Path(d)
+            self.addCleanup(setattr, prompt_files, 'overrides', None)
+            result = worker.check_prompt(engine, {'name': 'filler-selection.txt', 'text': 'EDITED'}, lambda value: None)
+            self.assertEqual(list(Path(d).iterdir()), [])
+        self.assertEqual(result['after'], len(cases))
+        self.assertFalse(result['worse'])
+        self.assertEqual(seen[-1], prompt_files.builtin('filler-selection.txt'))
+        self.assertEqual(prompt_files.pending, {})
+        with self.assertRaises(ValueError):
+            worker.check_prompt(engine, {'name': 'edit-plan-examples.json', 'text': '[{"role":"assistant","content":"x"}]'}, lambda value: None)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -156,7 +156,44 @@ import CoreGraphics
         assert(HotkeyBinding.meeting(for:HotkeyBinding(trigger:.modifierTap(.rightShift)), follows:true, saved:leftMeeting) == .defaultMeeting)
         assert(HotkeyValidation.problem(for:meeting, meeting:HotkeyBinding.meeting(for:meeting, follows:true, saved:leftMeeting)) != nil)
 
-        print("Hotkey tests passed: modifier tap, left/right, chords, consumption, suspension, stale modifiers, test mode, Fn, validation, conflicts")
+        // The translation key has its own action: a chord is consumed, and a
+        // modifier tap works next to the dictation tap.
+        let translating = GlobalHotkey()
+        var translations = 0, plain = 0
+        translating.onToggle = { plain += 1 }
+        translating.onTranslate = { translations += 1 }
+        translating.update(translation: .defaultTranslation)
+        _ = translating.handle(type:.flagsChanged, event:modifierEvent(61, rightOption), now:1)
+        assert(translating.handle(type:.keyDown, event:keyEvent(17, true, rightOption), now:1.05))
+        assert(translating.handle(type:.keyUp, event:keyEvent(17, false, rightOption), now:1.1))
+        _ = translating.handle(type:.flagsChanged, event:modifierEvent(61, 0), now:1.2)
+        drain()
+        assert(translations == 1 && plain == 0)
+        let rightCommand = CGEventFlags.maskCommand.rawValue | 0x10
+        translating.update(translation: HotkeyBinding(trigger:.modifierTap(.rightCommand)))
+        _ = translating.handle(type:.flagsChanged, event:modifierEvent(54, rightCommand), now:5)
+        _ = translating.handle(type:.flagsChanged, event:modifierEvent(54, 0), now:5.2)
+        _ = translating.handle(type:.flagsChanged, event:modifierEvent(61, rightOption), now:6)
+        _ = translating.handle(type:.flagsChanged, event:modifierEvent(61, 0), now:6.2)
+        drain()
+        assert(translations == 2 && plain == 1)
+        // Right Command + C still copies and is not a tap.
+        _ = translating.handle(type:.flagsChanged, event:modifierEvent(54, rightCommand), now:7)
+        assert(!translating.handle(type:.keyDown, event:keyEvent(8, true, rightCommand), now:7.05))
+        _ = translating.handle(type:.keyUp, event:keyEvent(8, false, rightCommand), now:7.1)
+        _ = translating.handle(type:.flagsChanged, event:modifierEvent(54, 0), now:7.2)
+        // Switched off, the key does nothing.
+        translating.update(translation: nil)
+        _ = translating.handle(type:.flagsChanged, event:modifierEvent(54, rightCommand), now:8)
+        _ = translating.handle(type:.flagsChanged, event:modifierEvent(54, 0), now:8.2)
+        drain()
+        assert(translations == 2 && plain == 1)
+        assert(HotkeyValidation.translationProblem(for:.defaultTranslation, dictation:dictation, meeting:meeting) == nil)
+        assert(HotkeyValidation.translationProblem(for:dictation, dictation:dictation, meeting:meeting) != nil)
+        assert(HotkeyValidation.translationProblem(for:meeting, dictation:dictation, meeting:meeting) != nil)
+        assert(HotkeyValidation.translationProblem(for:HotkeyBinding(trigger:.chord(keyCode:17, modifiers:[.leftShift])), dictation:dictation, meeting:meeting) != nil)
+
+        print("Hotkey tests passed: modifier tap, left/right, chords, consumption, suspension, stale modifiers, test mode, Fn, validation, conflicts, translation key")
     }
 }
 

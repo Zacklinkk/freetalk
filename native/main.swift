@@ -67,6 +67,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var dictationShortcutButton: NSButton!
     var meetingShortcutButton: NSButton!
     var meetingFollowButton: NSButton!
+    var translationShortcutButton: NSButton!, translationEnabledButton: NSButton!, nearbyButton: NSButton!
+    var translationTargetPicker: NSPopUpButton!
+    /// This recording inserts a translation (the translation key started it).
+    var translating = false
     var shortcutTestLabel: NSTextField!
     let hotkeyRecorder = HotkeyRecorder()
     let hotkeyTester = HotkeyTestController()
@@ -122,7 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Read cloud credentials once at launch, in the background: after an
         // update macOS asks here, not when the next recording starts.
         let cloudSettings = CloudEditorSettings.load()
-        if cloudSettings.serviceReady && cloudSettings.anyFeature { CloudCredentialStore.prefetch(cloudSettings.baseURL) }
+        if cloudSettings.serviceReady && cloudSettings.readsKeyAtLaunch { CloudCredentialStore.prefetch(cloudSettings.baseURL) }
         promptTuning.scheduleNightly()
         appUpdater.canInstall = { [weak self] in
             guard let self = self else { return false }
@@ -220,7 +224,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             else if self.meetings.enabled { self.meetings.startRecording(title:"") }
             else { self.showMeetings(); self.meetings.showMessage("请先启用会议资料。之后 \(self.hotkey.meetingBinding.display) 可开始或结束会议录音。") }
         }
+        hotkey.onTranslate = { [weak self] in self?.translateToggle() }
         hotkey.onEscape = { [weak self] in self?.cancelRecording() }
+        if windowRecognitionEnabled && WindowText.permitted { WindowText.warmUp() }
         updateHotkey()
         ticks = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             guard let self = self else { return }
@@ -323,6 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !hotkeyRecorder.isRecording else { return }
         dictationShortcutButton.title = hotkey.binding.display
         meetingShortcutButton.title = hotkey.meetingBinding.display
+        refreshTranslationLabel()
     }
     func loadHotkeyBindings() {
         var dictation = HotkeyBinding.load("hotkeyBindingV1") ?? .defaultDictation
@@ -331,12 +338,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if HotkeyValidation.problem(for: dictation, meeting: meeting) != nil { dictation = .defaultDictation }
         if HotkeyValidation.meetingProblem(for: meeting, dictation: dictation) != nil { meeting = .defaultMeeting }
         hotkey.update(binding: dictation, meetingBinding: meeting)
+        loadTranslationBinding()
     }
     func applyDictationBinding(_ binding: HotkeyBinding) {
         binding.save("hotkeyBindingV1")
         let meeting = HotkeyBinding.meeting(for: binding, follows: meetingFollowsDictation, saved: hotkey.meetingBinding)
         meeting.save("meetingBindingV1")
         hotkey.update(binding: binding, meetingBinding: meeting)
+        loadTranslationBinding()
         shortcutTestLabel?.stringValue = savedMessage("已保存：\(binding.display)", binding)
         updateHotkey(); refreshHotkeyLabels()
     }
@@ -344,6 +353,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.set(false, forKey:"meetingFollowsMainV1")
         binding.save("meetingBindingV1")
         hotkey.update(binding: hotkey.binding, meetingBinding: binding)
+        loadTranslationBinding()
         shortcutTestLabel?.stringValue = savedMessage("已保存：会议键 \(binding.display)", binding)
         updateHotkey(); refreshHotkeyLabels()
     }
@@ -528,6 +538,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         HotkeyBinding.defaultDictation.save("hotkeyBindingV1")
         HotkeyBinding.defaultMeeting.save("meetingBindingV1")
         hotkey.update(binding:.defaultDictation, meetingBinding:.defaultMeeting)
+        HotkeyBinding.defaultTranslation.save("translationBindingV1"); loadTranslationBinding()
         shortcutTestLabel?.stringValue = "已恢复默认快捷键"
         updateHotkey(); refreshHotkeyLabels()
     }
@@ -578,7 +589,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     @objc func menuToggle() { DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.toggle() } }
-    @objc func toggle() {
+    @objc func toggle() { startOrStop(translate: false) }
+    func startOrStop(translate: Bool) {
         guard !meetings.busy else { showMeetings(); return }
         if phase == .recording { stopRecording(); return }
         if phase == .preparing { cancelRecording(reload:false); return }
@@ -589,6 +601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         tutorialSession = onboarding.wantsTrial
         if tutorialSession { onboarding.begin() }
+        translating = translate && !tutorialSession
         correctionLearner.stop(); learningHUD.hide()
         let personalTerms: [String]
         let aliases: [VocabularyAlias]
@@ -615,6 +628,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setStatus("正在打开麦克风…")
         let policy = ["auto", "always", "fast"][cleanupPicker.indexOfSelectedItem]
         var begin: [String: Any] = ["context": context, "cleanup_policy": policy]
+        if translating { begin.merge(translationRequest()) { _, new in new } }
         // Fast-only mode never reaches a model; keep the cloud out of it entirely.
         if policy != "fast" {
             let cloudSettings = CloudEditorSettings.load()
@@ -628,6 +642,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             switch response {
             case .failure(let error): self.phase = .idle; self.hudTimer?.invalidate(); self.hud.finish(success: false, message: error.localizedDescription); self.setStatus(error.localizedDescription)
             case .success:
+                self.recognizeWindowText(token: token, nearby: context["nearby"] as? String ?? "")
                 self.recorder.onChunk = { [weak self] pcm in
                     guard let self = self, self.session == token else { return }
                     self.worker.request("chunk", ["pcm": pcm.base64EncodedString()]) { response in
@@ -653,7 +668,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     if case .failure(let error) = response { self.phase = .idle; self.hudTimer?.invalidate(); self.hud.finish(success: false, message: error.localizedDescription); self.setStatus(error.localizedDescription); return }
                     self.phase = .recording; self.started = Date()
                     self.recordingClock.start()
-                    self.setStatus("正在录音 · \(device.name) · 上限 \(DictationLimit.title(self.recordingClock.limit)) · \(self.hotkey.binding.display) 停止")
+                    self.setStatus((self.translating ? "正在录音（插入\(self.translationTargetTitle == "自动语言" ? "" : self.translationTargetTitle)译文）" : "正在录音") + " · \(device.name) · 上限 \(DictationLimit.title(self.recordingClock.limit)) · \(self.hotkey.binding.display) 停止")
                     self.timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
                         guard let self = self, self.phase == .recording else { return }
                         let timing = self.recordingClock.snapshot(audioSeconds: self.seconds)
@@ -713,7 +728,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let elapsed = Date().timeIntervalSince(self.stopped)
                     let cleanup = result["cleanup"] as? [String: Any] ?? [:]
                     let modelUsed = cleanup["model_used"] as? Bool ?? false
-                    let cleanupLabel = cleanupSummary(cleanup)
+                    let translation = result["translation"] as? [String: Any]
+                    let translationNote = Self.translationSummary(translation)
+                    let cleanupLabel = cleanupSummary(cleanup) + (translationNote.map { " · \($0)" } ?? "")
                     let routes = cleanup["signals"] as? [String] ?? []
                     self.detailsLabel.stringValue = String(format: "音频 %.1f 秒 · 停止到文字 %.2f 秒 · 整理 %.2f 秒", duration, elapsed, cleanup["seconds"] as? Double ?? 0) + "\n" + cleanupLabel
                     self.currentEntry = VoiceHistoryEntry(id: token.uuidString, createdAt: Date(), text: self.lastText, raw: self.lastRaw,
@@ -728,19 +745,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         self.phase = .idle; self.hudTimer?.invalidate(); self.hud.finish(success: false, message: "未识别到文字"); self.setStatus("未识别到文字；请检查麦克风或稍后重试"); return
                     }
                     self.processingStage = "正在输入…"; self.setStatus(self.processingStage)
-                    self.inserter.insert(self.lastText, into: self.target) { success, message in
+                    self.inserter.insert(self.lastText, into: self.target, html: self.richHTML(self.lastText)) { success, message in
                         guard self.session == token else { return }
                         self.phase = .idle; self.hudTimer?.invalidate()
                         self.currentEntry?.insertionStatus = message; self.currentEntry?.insertionCheck = self.inserter.lastCheck; self.saveResult()
                         // The user chose the cloud; say so when this result came from the local model instead.
-                        let notice = (cleanup["cloud_fallback"] as? String).map { "\(CloudEditorSettings.describe(fallback: $0))，已改用本地模型整理" }
-                        self.hud.finish(success: success, message: message, notice: notice)
+                        let translated = translation?["status"] as? String == "translated"
+                        let notice = translation != nil && !translated ? translationNote
+                            : (cleanup["cloud_fallback"] as? String).map { "\(CloudEditorSettings.describe(fallback: $0))，已改用本地模型整理" }
+                        self.hud.finish(success: success, message: message, notice: notice, done: translation == nil ? nil : translated ? "已输入译文" : "已输入原文")
                         self.setStatus(notice.map { "\(message) · \($0)" } ?? message)
                         // Watch for edits whenever the paste was delivered, verified or not:
                         // many web editors cannot be read back right away yet still expose
                         // their value a moment later. The learner stops itself, with a
                         // recorded reason, if the field stays unreadable.
-                        if self.learningButton.state == .on, let target = self.target, success || message.hasPrefix("粘贴已发送") {
+                        // A translation differs from the dictation by design; edits to it teach nothing.
+                        if translation != nil {
+                            self.annotateHistory(self.currentEntry?.id) { $0.learningStop = "翻译输入不学习" }
+                        } else if self.learningButton.state == .on, let target = self.target, success || message.hasPrefix("粘贴已发送") {
                             self.learningEntryID = self.currentEntry?.id
                             self.annotateHistory(self.learningEntryID) { $0.learned = [] }
                             self.correctionLearner.start(target:self.inserter.lastTarget ?? target,inserted:self.lastText,raw:self.lastRaw,store:self.correctionStore)
