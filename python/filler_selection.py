@@ -4,23 +4,25 @@ The prompt is prompts/filler-selection.txt.
 """
 import json
 import re
-from edits import protected_span, contextual_cleanup, replace_spans
+from edits import core, protected_span, contextual_cleanup, replace_spans
 
 
-def candidates(raw):
+def candidates(raw, scene=''):
     rows = []
     pattern = r'对[呀啊]?[，,。]\s*然后[，,]?\s*|就是说[哦啊][，,]?\s*|然后|就是|那个|这个|对呀|对啊|[嗯呃哦啊呀][，,]?\s*'
     for m in re.finditer(pattern,raw):
         a,b=m.span(); old=m[0]; new=''
         if old.startswith('就是说'): new='就是说' + ('，' if '，' in old else ',' if ',' in old else '')
-        if protected_span(raw,a,b) or not contextual_cleanup(raw,old,new,a,'filler'):continue
+        # A particle that ends a clause (好的呀，) is tone, not a pause: the
+        # comma after it separates two clauses and stays. In a chat with a
+        # person the tone itself is kept.
+        if old[0] in '啊呀' and a and core(raw[a-1]):
+            if scene == 'conversation': continue
+            old = old[0]; b = a+1
+        if scene == 'conversation' and old in {'对呀', '对啊'}: continue
+        # Sequential 然后 is refused by contextual_cleanup (see sequential_then).
+        if protected_span(raw,a,b) or not contextual_cleanup(raw,old,new,a,'filler',scene):continue
         before,after=raw[max(0,a-40):a],raw[b:b+50]
-        if old == '然后':
-            clause = re.split(r'[。！？!?\n]',before)[-1].rstrip(' ，,')
-            # A small model sometimes calls any connective a filler. Keep
-            # sequential clauses unless this is a clearly redundant restart.
-            redundant = re.match(r'中间|最后|之后|接下来',after) or clause in {'我们','我','你','大家'}
-            if clause and not redundant: continue
         # A missing demonstrative can change which file/object is intended.
         if old in {'这个','那个'} and not re.search(r'的$',before):continue
         rows.append(dict(id='d'+str(len(rows)+1),start=a,end=b,old=old,new=new,before=before,after=after))

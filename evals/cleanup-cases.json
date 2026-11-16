@@ -1,0 +1,1224 @@
+{
+ "description": "Cleanup eval set: the 22 cases the user approved on 2026-11-16 plus held-out variants of each failure type. Run python scripts/eval-cleanup.py before changing a prompt or a rule; tests/test_cleanup_eval.py replays the plans in CI.",
+ "cases": [
+  {
+   "id": "filler-narrative",
+   "group": "model_wrong",
+   "title": "叙述里的口水词（嗯、呃、那个、就是）",
+   "raw": "嗯，那个，我们先把这个需求，呃，过一遍，然后就是，再定排期。",
+   "gt": "我们先把这个需求过一遍，然后再定排期。",
+   "must": [
+    "需求过一遍",
+    "然后再定排期"
+   ],
+   "must_not": [
+    "嗯",
+    "呃",
+    "就是"
+   ]
+  },
+  {
+   "id": "filler-meaningful",
+   "group": "baseline",
+   "title": "有指代或判断作用的“那个、就是、对”要保留",
+   "raw": "你把那个文件发我。对，答案就是这个。",
+   "gt": "你把那个文件发我。对，答案就是这个。",
+   "must": [
+    "那个文件",
+    "对，",
+    "就是这个"
+   ],
+   "must_not": [],
+   "refused": [
+    {
+     "plan": {
+      "edits": [
+       {
+        "old": "那个文件",
+        "new": "文件",
+        "kind": "filler"
+       }
+      ]
+     }
+    },
+    {
+     "drop": [
+      "就是",
+      "那个",
+      "对"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "stutter-emphasis",
+   "group": "baseline",
+   "title": "口吃要去掉，叠词和强调要保留",
+   "raw": "我我们先看看能能不能复现，这个问题非常非常急。",
+   "gt": "我们先看看能不能复现，这个问题非常非常急。",
+   "must": [
+    "我们先看看能不能复现",
+    "非常非常急"
+   ],
+   "must_not": [
+    "我我",
+    "能能"
+   ],
+   "refused": [
+    {
+     "plan": {
+      "edits": [
+       {
+        "old": "非常非常",
+        "new": "非常",
+        "kind": "stutter"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "correction-reason",
+   "group": "baseline",
+   "title": "改口：换掉旧说法，保留后面的理由",
+   "raw": "会议定在周四下午，不对，周五上午，因为周四老板出差。",
+   "gt": "会议定在周五上午，因为周四老板出差。",
+   "must": [
+    "周五上午",
+    "因为周四老板出差"
+   ],
+   "must_not": [
+    "周四下午",
+    "不对"
+   ],
+   "reply": {
+    "plan": {
+     "repairs": [
+      {
+       "old": "周四下午",
+       "new": "周五上午",
+       "cue": "不对，周五上午，"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "correction-quantity",
+   "group": "baseline",
+   "title": "改口：只说了新数量，对象沿用前文",
+   "raw": "先抽五十条数据，呃，不对，一百条，做标注。",
+   "gt": "先抽100条数据，做标注。",
+   "must": [
+    "100条数据"
+   ],
+   "must_not": [
+    "50",
+    "五十",
+    "不对"
+   ],
+   "reply": {
+    "plan": {
+     "repairs": [
+      {
+       "old": "五十条",
+       "new": "一百条",
+       "cue": "不对，一百条，"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "spoken-restart",
+   "group": "baseline",
+   "title": "整句撤回后重说",
+   "raw": "帮我把这段删掉。算了，重新说，帮我把这段移到文末。",
+   "gt": "帮我把这段移到文末。",
+   "must": [
+    "帮我把这段移到文末"
+   ],
+   "must_not": [
+    "删掉",
+    "算了",
+    "重新说"
+   ],
+   "reply": {
+    "plan": {
+     "restarts": [
+      {
+       "drop": [
+        0
+       ],
+       "keep": [
+        1
+       ],
+       "cue": "算了，重新说"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "pause-split",
+   "group": "baseline",
+   "title": "停顿把一句话切成两半",
+   "raw": "我们先把登录接口。改成异步的，然后再压测。",
+   "gt": "我们先把登录接口改成异步的，然后再压测。",
+   "must": [
+    "登录接口改成异步的"
+   ],
+   "must_not": [
+    "接口。"
+   ],
+   "reply": {
+    "plan": {
+     "edits": [
+      {
+       "old": "接口。改成",
+       "new": "接口改成",
+       "kind": "punctuation"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "question-mark",
+   "group": "baseline",
+   "title": "问句被识别成句号",
+   "raw": "这个版本今天能发吗。你确认一下灰度比例。",
+   "gt": "这个版本今天能发吗？你确认一下灰度比例。",
+   "must": [
+    "能发吗？"
+   ],
+   "must_not": [],
+   "reply": {
+    "plan": {
+     "edits": [
+      {
+       "old": "能发吗。",
+       "new": "能发吗？",
+       "kind": "punctuation"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "run-on-commas",
+   "group": "baseline",
+   "title": "长句缺逗号",
+   "raw": "先拉最新代码然后跑单测最后把覆盖率报告发到群里。",
+   "gt": "先拉最新代码，然后跑单测，最后把覆盖率报告发到群里。",
+   "must": [
+    "代码，然后",
+    "单测，最后"
+   ],
+   "must_not": [],
+   "reply": {
+    "plan": {
+     "edits": [
+      {
+       "old": "代码然后",
+       "new": "代码，然后",
+       "kind": "punctuation"
+      },
+      {
+       "old": "单测最后",
+       "new": "单测，最后",
+       "kind": "punctuation"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "numbers-context",
+   "group": "model_not_called",
+   "title": "数字看语境：计数和时间用阿拉伯数字，成语、序数、“两个人”保留",
+   "raw": "一共两个人，每人跑十二组实验，下午三点前交，大家一心一意先把第一组做完。",
+   "gt": "一共两个人，每人跑12组实验，下午3点前交，大家一心一意先把第一组做完。",
+   "must": [
+    "两个人",
+    "12组",
+    "3点",
+    "一心一意",
+    "第一组"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "version-number",
+   "group": "model_not_called",
+   "title": "口述的版本号",
+   "raw": "把依赖升级到 v 二点三点一，再用 Python 三点十二跑一遍。",
+   "gt": "把依赖升级到 v2.3.1，再用 Python 3.12 跑一遍。",
+   "must": [
+    "v2.3.1",
+    "3.12"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "spelled-acronym",
+   "group": "model_not_called",
+   "title": "逐个字母念的缩写、英文术语大小写、参数里的数字",
+   "raw": "这批数据先做 S F T，lora 的 rank 设成十六，batch size 设成三十二。",
+   "gt": "这批数据先做 SFT，LoRA 的 rank 设成16，batch size 设成32。",
+   "must": [
+    "SFT",
+    "LoRA",
+    "16",
+    "32"
+   ],
+   "must_not": [],
+   "context": {
+    "personal_terms": [
+     "LoRA"
+    ]
+   }
+  },
+  {
+   "id": "english-loanword",
+   "group": "model_wrong",
+   "title": "英文词被识别成中文音译（真实口述）",
+   "raw": "然后起一个下载服务，下载到我的麦克上。",
+   "gt": "然后起一个下载服务，下载到我的 Mac 上。",
+   "must": [
+    "Mac"
+   ],
+   "must_not": [
+    "麦克"
+   ],
+   "context": {
+    "app": "Terminal",
+    "scene": "terminal",
+    "window_title": "zsh — 120×40"
+   },
+   "refused": [
+    {
+     "drop": [
+      "然后"
+     ]
+    },
+    {
+     "plan": {
+      "edits": [
+       {
+        "old": "然后起",
+        "new": "起",
+        "kind": "filler"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "literal-quote",
+   "group": "baseline",
+   "title": "引号里的话照抄，里面的“不对”不是改口",
+   "raw": "他原话是“这个不对，改成周三”，你照抄进纪要。",
+   "gt": "他原话是“这个不对，改成周三”，你照抄进纪要。",
+   "must": [
+    "“这个不对，改成周三”"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "negation-condition",
+   "group": "baseline",
+   "title": "否定、条件和疑问不能丢",
+   "raw": "如果灰度没问题的话，就先不要回滚，也不能删旧镜像，你觉得呢？",
+   "gt": "如果灰度没问题的话，就先不要回滚，也不能删旧镜像，你觉得呢？",
+   "must": [
+    "如果",
+    "不要回滚",
+    "不能删旧镜像",
+    "你觉得呢？"
+   ],
+   "must_not": [],
+   "refused": [
+    {
+     "plan": {
+      "edits": [
+       {
+        "old": "如果灰度没问题的话，",
+        "new": "灰度没问题，",
+        "kind": "filler"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "enumeration",
+   "group": "list_format",
+   "title": "明确的“第一、第二、第三”排成列表",
+   "raw": "这次要做三件事，第一，补齐单测，第二，修掉内存泄漏，第三，更新文档。",
+   "gt": "这次要做三件事：\n1. 补齐单测\n2. 修掉内存泄漏\n3. 更新文档",
+   "must": [
+    "补齐单测",
+    "修掉内存泄漏",
+    "更新文档"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "no-answer",
+   "group": "baseline",
+   "title": "口述是给别人的请求，不能替用户执行",
+   "raw": "帮我写一个快速排序，用 Python，然后解释一下时间复杂度。",
+   "gt": "帮我写一个快速排序，用 Python，然后解释一下时间复杂度。",
+   "must": [
+    "帮我写一个快速排序"
+   ],
+   "must_not": [
+    "def ",
+    "O(n"
+   ]
+  },
+  {
+   "id": "chat-tone",
+   "group": "model_wrong",
+   "title": "聊天场景保留口语语气",
+   "raw": "哈哈哈好的呀，那周末见呗，记得带上那个充电宝哈。",
+   "gt": "哈哈哈好的呀，那周末见呗，记得带上那个充电宝哈。",
+   "must": [
+    "哈哈哈",
+    "呀",
+    "呗",
+    "那个充电宝哈"
+   ],
+   "must_not": [],
+   "context": {
+    "app": "微信",
+    "scene": "conversation",
+    "window_title": "小周"
+   },
+   "refused": [
+    {
+     "drop": [
+      "呀"
+     ]
+    },
+    {
+     "plan": {
+      "edits": [
+       {
+        "old": "好的呀，",
+        "new": "好的，",
+        "kind": "filler"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "email-formal",
+   "group": "rejected_by_check",
+   "title": "邮件场景：去掉口水词、补问号，不扩写",
+   "raw": "嗯王老师您好，就是我想跟您确认一下下周二的答辩时间是不是还是上午九点。",
+   "gt": "王老师您好，我想跟您确认一下，下周二的答辩时间是不是还是上午9点？",
+   "must": [
+    "王老师您好",
+    "下周二",
+    "9点？"
+   ],
+   "must_not": [
+    "嗯",
+    "就是"
+   ],
+   "context": {
+    "app": "邮件",
+    "scene": "general",
+    "window_title": "新邮件 — 答辩时间确认"
+   },
+   "reply": {
+    "drop": [
+     "就是"
+    ]
+   }
+  },
+  {
+   "id": "name-from-field",
+   "group": "model_not_called",
+   "title": "人名近音字，正确写法已在输入框里",
+   "raw": "林小峰那边周三给接口文档，陈一明负责联调。",
+   "gt": "林晓峰那边周三给接口文档，陈一鸣负责联调。",
+   "must": [
+    "林晓峰",
+    "陈一鸣"
+   ],
+   "must_not": [],
+   "context": {
+    "app": "飞书",
+    "scene": "general",
+    "window_title": "项目周会纪要",
+    "initial": "项目周会纪要\n参会：林晓峰、陈一鸣、周可\n"
+   },
+   "reply": {
+    "plan": {
+     "edits": [
+      {
+       "old": "林小峰",
+       "new": "林晓峰",
+       "kind": "spelling"
+      },
+      {
+       "old": "陈一明",
+       "new": "陈一鸣",
+       "kind": "spelling"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "term-from-screen",
+   "group": "rejected_by_check",
+   "title": "专业词只在屏幕上出现（输入框里没有）",
+   "raw": "这个策略的下普比率还行，但是最大回测有点大。",
+   "gt": "这个策略的夏普比率还行，但是最大回撤有点大。",
+   "must": [
+    "夏普比率",
+    "最大回撤"
+   ],
+   "must_not": [],
+   "context": {
+    "app": "微信",
+    "scene": "conversation",
+    "window_title": "量化交流群",
+    "nearby": "老陈：回测跑完了 年化收益 23.5% 夏普比率 1.8 最大回撤 12%"
+   },
+   "reply": {
+    "plan": {
+     "edits": [
+      {
+       "old": "下普比率",
+       "new": "夏普比率",
+       "kind": "spelling"
+      },
+      {
+       "old": "最大回测",
+       "new": "最大回撤",
+       "kind": "spelling"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "english-dictation",
+   "group": "rejected_by_check",
+   "title": "英文口述的口水词和改口",
+   "raw": "um so I think we should, uh, ship it on Friday, no wait, Monday.",
+   "gt": "I think we should ship it on Monday.",
+   "must": [
+    "Monday"
+   ],
+   "must_not": [
+    "Friday",
+    "um",
+    "uh"
+   ],
+   "reply": {
+    "plan": {
+     "repairs": [
+      {
+       "old": "Friday",
+       "new": "Monday",
+       "cue": "no wait, Monday."
+      }
+     ]
+    }
+   },
+   "refused": [
+    {
+     "plan": {
+      "edits": [
+       {
+        "old": "Friday, no wait, Monday",
+        "new": "Monday",
+        "kind": "punctuation"
+       }
+      ]
+     }
+    }
+   ],
+   "also_correct": [
+    {
+     "plan": {
+      "repairs": [
+       {
+        "old": "Friday, no wait, Monday",
+        "new": "Monday",
+        "cue": "no wait, Monday"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "numbers-context-2",
+   "group": "model_not_called",
+   "variant_of": "numbers-context",
+   "title": "数字看语境：计数和时间用阿拉伯数字，成语、序数、“两个人”保留",
+   "raw": "这次来了两位客户，会议室订到下午四点，每人发十五页材料，第二页先空着。",
+   "gt": "这次来了两位客户，会议室订到下午4点，每人发15页材料，第二页先空着。",
+   "must": [
+    "两位客户",
+    "下午4点",
+    "15页",
+    "第二页"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "numbers-context-3",
+   "group": "model_not_called",
+   "variant_of": "numbers-context",
+   "title": "数字看语境：计数和时间用阿拉伯数字，成语、序数、“两个人”保留",
+   "raw": "两次都没复现，我再跑二十轮看看，三心二意可不行，先把第三轮的日志发我。",
+   "gt": "两次都没复现，我再跑20轮看看，三心二意可不行，先把第三轮的日志发我。",
+   "must": [
+    "两次",
+    "20轮",
+    "三心二意",
+    "第三轮"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "numbers-context-4",
+   "group": "model_not_called",
+   "variant_of": "numbers-context",
+   "title": "数字看语境：计数和时间用阿拉伯数字，成语、序数、“两个人”保留",
+   "raw": "晚上八点半之前，把这一百二十条样本分成两组。",
+   "gt": "晚上8点半之前，把这120条样本分成两组。",
+   "must": [
+    "8点半",
+    "120条",
+    "两组"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "version-number-2",
+   "group": "model_not_called",
+   "variant_of": "version-number",
+   "title": "口述的版本号",
+   "raw": "装一下 Xcode 十六点二，然后用 Swift 五点十 编译。",
+   "gt": "装一下 Xcode 16.2，然后用 Swift 5.10 编译。",
+   "must": [
+    "Xcode 16.2",
+    "Swift 5.10"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "version-number-3",
+   "group": "model_not_called",
+   "variant_of": "version-number",
+   "title": "口述的版本号",
+   "raw": "这个问题在 v 三点零点二 修好了，记得把 Python 升到三点十三。",
+   "gt": "这个问题在 v3.0.2 修好了，记得把 Python 升到3.13。",
+   "must": [
+    "v3.0.2",
+    "3.13"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "version-number-4",
+   "group": "model_not_called",
+   "variant_of": "version-number",
+   "title": "产品名后面的时间不是版本号",
+   "raw": "Zoom 三点十二分开会，Excel 两点前发我。",
+   "gt": "Zoom 3点12分开会，Excel 2点前发我。",
+   "must": [
+    "3点12分",
+    "2点前"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "spelled-acronym-2",
+   "group": "model_not_called",
+   "variant_of": "spelled-acronym",
+   "title": "逐个字母念的缩写、英文术语大小写、参数里的数字",
+   "raw": "部署先用 vllm，G P U 数量改成四，端口设成八零零零。",
+   "gt": "部署先用 vLLM，GPU 数量改成4，端口设成8000。",
+   "must": [
+    "vLLM",
+    "GPU",
+    "改成4",
+    "8000"
+   ],
+   "must_not": [],
+   "context": {
+    "personal_terms": [
+     "vLLM"
+    ]
+   }
+  },
+  {
+   "id": "spelled-acronym-3",
+   "group": "model_not_called",
+   "variant_of": "spelled-acronym",
+   "title": "逐个字母念的缩写、英文术语大小写、参数里的数字",
+   "raw": "A P I 的超时调到三十秒，重试次数设为五。",
+   "gt": "API 的超时调到30秒，重试次数设为5。",
+   "must": [
+    "API",
+    "30秒",
+    "设为5"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "spelled-acronym-4",
+   "group": "model_not_called",
+   "variant_of": "spelled-acronym",
+   "title": "选项字母和“改成一样”不是缩写和数值",
+   "raw": "方案 A B C 你挑一个，格式改成一样的。",
+   "gt": "方案 A B C 你挑一个，格式改成一样的。",
+   "must": [
+    "A B C",
+    "改成一样"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "name-from-field-2",
+   "group": "model_not_called",
+   "variant_of": "name-from-field",
+   "title": "人名近音字，正确写法已在输入框里",
+   "raw": "张思源明天交初稿，刘一凡负责审校。",
+   "gt": "张思远明天交初稿，刘一帆负责审校。",
+   "must": [
+    "张思远",
+    "刘一帆"
+   ],
+   "must_not": [],
+   "context": {
+    "app": "邮件",
+    "scene": "general",
+    "window_title": "新邮件 — 初稿安排",
+    "initial": "收件人：张思远、刘一帆\n"
+   },
+   "reply": {
+    "plan": {
+     "edits": [
+      {
+       "old": "张思源",
+       "new": "张思远",
+       "kind": "spelling"
+      },
+      {
+       "old": "刘一凡",
+       "new": "刘一帆",
+       "kind": "spelling"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "name-from-field-3",
+   "group": "model_not_called",
+   "variant_of": "name-from-field",
+   "title": "人名近音字，正确写法已在输入框里",
+   "raw": "赵文晶说预算下周批，孙浩然没意见。",
+   "gt": "赵文静说预算下周批，孙浩然没意见。",
+   "must": [
+    "赵文静",
+    "孙浩然"
+   ],
+   "must_not": [],
+   "context": {
+    "app": "飞书",
+    "scene": "general",
+    "window_title": "预算评审",
+    "nearby": "参会人：赵文静、孙浩然"
+   },
+   "reply": {
+    "plan": {
+     "edits": [
+      {
+       "old": "赵文晶",
+       "new": "赵文静",
+       "kind": "spelling"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "name-from-field-4",
+   "group": "model_not_called",
+   "variant_of": "name-from-field",
+   "title": "屏幕上的两个字近音词（公司）不能替换口述里的“公式”",
+   "raw": "这个公式要改一下。",
+   "gt": "这个公式要改一下。",
+   "must": [
+    "公式"
+   ],
+   "must_not": [],
+   "context": {
+    "app": "飞书",
+    "scene": "general",
+    "window_title": "公司周报"
+   },
+   "refused": [
+    {
+     "plan": {
+      "edits": [
+       {
+        "old": "公式",
+        "new": "公司",
+        "kind": "spelling"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "email-formal-2",
+   "group": "rejected_by_check",
+   "variant_of": "email-formal",
+   "title": "邮件场景：去掉口水词、补问号，不扩写",
+   "raw": "李经理您好，就是我想问一下合同是不是这周能盖章。",
+   "gt": "李经理您好，我想问一下合同是不是这周能盖章？",
+   "must": [
+    "李经理您好，我想问一下",
+    "盖章？"
+   ],
+   "must_not": [
+    "就是"
+   ],
+   "context": {
+    "app": "邮件",
+    "scene": "general",
+    "window_title": "新邮件 — 合同盖章"
+   },
+   "reply": {
+    "drop": [
+     "就是"
+    ]
+   }
+  },
+  {
+   "id": "email-formal-3",
+   "group": "rejected_by_check",
+   "variant_of": "email-formal",
+   "title": "邮件场景：去掉口水词、补问号，不扩写",
+   "raw": "各位好，就是我们下周一的评审改到线上了。",
+   "gt": "各位好，我们下周一的评审改到线上了。",
+   "must": [
+    "各位好，我们下周一"
+   ],
+   "must_not": [
+    "就是"
+   ],
+   "context": {
+    "app": "邮件",
+    "scene": "general",
+    "window_title": "新邮件 — 评审通知"
+   },
+   "reply": {
+    "drop": [
+     "就是"
+    ]
+   }
+  },
+  {
+   "id": "email-formal-4",
+   "group": "rejected_by_check",
+   "variant_of": "email-formal",
+   "title": "作判断的“就是”保留",
+   "raw": "现在的问题就是我们没有测过。",
+   "gt": "现在的问题就是我们没有测过。",
+   "must": [
+    "问题就是我们"
+   ],
+   "must_not": [],
+   "refused": [
+    {
+     "plan": {
+      "edits": [
+       {
+        "old": "问题就是我们",
+        "new": "问题我们",
+        "kind": "filler"
+       }
+      ]
+     }
+    },
+    {
+     "drop": [
+      "就是"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "term-from-screen-2",
+   "group": "rejected_by_check",
+   "variant_of": "term-from-screen",
+   "title": "专业词只在屏幕上出现（输入框里没有）",
+   "raw": "毛立率掉得有点狠，周转天数要盯一下。",
+   "gt": "毛利率掉得有点狠，周转天数要盯一下。",
+   "must": [
+    "毛利率"
+   ],
+   "must_not": [],
+   "context": {
+    "app": "微信",
+    "scene": "conversation",
+    "window_title": "财务小组",
+    "nearby": "小王：这个季度的毛利率掉到了 18%，周转天数也变长了"
+   },
+   "reply": {
+    "plan": {
+     "edits": [
+      {
+       "old": "毛立率",
+       "new": "毛利率",
+       "kind": "spelling"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "term-from-screen-3",
+   "group": "rejected_by_check",
+   "variant_of": "term-from-screen",
+   "title": "专业词只在屏幕上出现（输入框里没有）",
+   "raw": "熔断与值先调到百分之六十。",
+   "gt": "熔断阈值先调到60%。",
+   "must": [
+    "熔断阈值",
+    "60%"
+   ],
+   "must_not": [],
+   "context": {
+    "app": "飞书",
+    "scene": "general",
+    "window_title": "稳定性周会",
+    "nearby": "接口 P99 延迟 320ms，熔断阈值 50%"
+   },
+   "reply": {
+    "plan": {
+     "edits": [
+      {
+       "old": "熔断与值",
+       "new": "熔断阈值",
+       "kind": "spelling"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "english-dictation-2",
+   "group": "rejected_by_check",
+   "variant_of": "english-dictation",
+   "title": "英文口述的口水词和改口",
+   "raw": "We need, um, five servers, I mean six servers for the demo.",
+   "gt": "We need six servers for the demo.",
+   "must": [
+    "six servers"
+   ],
+   "must_not": [
+    "five",
+    "um",
+    "I mean"
+   ],
+   "reply": {
+    "plan": {
+     "repairs": [
+      {
+       "old": "five servers",
+       "new": "six servers",
+       "cue": "I mean six servers"
+      }
+     ]
+    }
+   },
+   "also_correct": [
+    {
+     "plan": {
+      "repairs": [
+       {
+        "old": "five",
+        "new": "six",
+        "cue": "I mean six servers for the demo."
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "english-dictation-3",
+   "group": "rejected_by_check",
+   "variant_of": "english-dictation",
+   "title": "英文口述的口水词和改口",
+   "raw": "uh, let's meet at three, sorry, four o'clock.",
+   "gt": "Let's meet at four o'clock.",
+   "must": [
+    "four"
+   ],
+   "must_not": [
+    "three",
+    "uh",
+    "sorry"
+   ],
+   "reply": {
+    "plan": {
+     "repairs": [
+      {
+       "old": "three",
+       "new": "four",
+       "cue": "sorry, four o'clock."
+      }
+     ]
+    }
+   },
+   "also_correct": [
+    {
+     "plan": {
+      "edits": [
+       {
+        "old": "three, sorry, four o'clock.",
+        "new": "four o'clock.",
+        "kind": "punctuation"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "english-dictation-4",
+   "group": "rejected_by_check",
+   "variant_of": "english-dictation",
+   "title": "英文口述的口水词和改口",
+   "raw": "Send it to Anna, no wait, to Maria.",
+   "gt": "Send it to Maria.",
+   "must": [
+    "to Maria"
+   ],
+   "must_not": [
+    "Anna",
+    "wait"
+   ],
+   "reply": {
+    "plan": {
+     "repairs": [
+      {
+       "old": "Anna",
+       "new": "Maria",
+       "cue": "no wait, to Maria."
+      }
+     ]
+    }
+   },
+   "refused": [
+    {
+     "plan": {
+      "edits": [
+       {
+        "old": "no wait",
+        "new": "not wait",
+        "kind": "spelling"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "filler-narrative-2",
+   "group": "model_wrong",
+   "variant_of": "filler-narrative",
+   "title": "叙述里的口水词（嗯、呃、那个、就是）",
+   "raw": "呃，那个，你先把这个文档，嗯，发我一下，然后就是，我再看。",
+   "gt": "你先把这个文档发我一下，然后我再看。",
+   "must": [
+    "文档发我一下",
+    "然后我再看"
+   ],
+   "must_not": [
+    "呃",
+    "嗯",
+    "就是"
+   ]
+  },
+  {
+   "id": "filler-narrative-3",
+   "group": "model_wrong",
+   "variant_of": "filler-narrative",
+   "title": "叙述里的口水词（嗯、呃、那个、就是）",
+   "raw": "嗯，那个，我们下午，呃，先开个短会，然后就是，晚上再上线。",
+   "gt": "我们下午先开个短会，然后晚上再上线。",
+   "must": [
+    "先开个短会",
+    "然后晚上再上线"
+   ],
+   "must_not": [
+    "嗯",
+    "呃",
+    "就是"
+   ]
+  },
+  {
+   "id": "english-loanword-2",
+   "group": "model_wrong",
+   "variant_of": "english-loanword",
+   "title": "英文词被识别成中文音译（真实口述）",
+   "raw": "然后把安装包拷到我的麦克电脑上。",
+   "gt": "然后把安装包拷到我的 Mac 电脑上。",
+   "must": [
+    "Mac 电脑"
+   ],
+   "must_not": [
+    "麦克"
+   ]
+  },
+  {
+   "id": "english-loanword-3",
+   "group": "model_wrong",
+   "variant_of": "english-loanword",
+   "title": "麦克风、话筒意义的“麦克”保留",
+   "raw": "麦克风有杂音，换一个麦克试试。",
+   "gt": "麦克风有杂音，换一个麦克试试。",
+   "must": [
+    "麦克风",
+    "一个麦克"
+   ],
+   "must_not": [
+    "Mac"
+   ],
+   "refused": [
+    {
+     "plan": {
+      "edits": [
+       {
+        "old": "一个麦克",
+        "new": "一个 Mac",
+        "kind": "spelling"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "chat-tone-2",
+   "group": "model_wrong",
+   "variant_of": "chat-tone",
+   "title": "聊天场景保留口语语气",
+   "raw": "好呀好呀，那我们明天见啊，记得带伞哦。",
+   "gt": "好呀好呀，那我们明天见啊，记得带伞哦。",
+   "must": [
+    "好呀好呀",
+    "明天见啊",
+    "带伞哦"
+   ],
+   "must_not": [],
+   "context": {
+    "app": "微信",
+    "scene": "conversation",
+    "window_title": "小李"
+   },
+   "refused": [
+    {
+     "drop": "*"
+    }
+   ]
+  },
+  {
+   "id": "chat-tone-3",
+   "group": "model_wrong",
+   "variant_of": "chat-tone",
+   "title": "聊天场景保留口语语气",
+   "raw": "对呀，我刚看到，你那个方案挺好的呀。",
+   "gt": "对呀，我刚看到，你那个方案挺好的呀。",
+   "must": [
+    "对呀",
+    "那个方案",
+    "挺好的呀"
+   ],
+   "must_not": [],
+   "context": {
+    "app": "钉钉",
+    "scene": "conversation",
+    "window_title": "张三"
+   },
+   "refused": [
+    {
+     "drop": "*"
+    },
+    {
+     "plan": {
+      "edits": [
+       {
+        "old": "对呀，",
+        "new": "",
+        "kind": "filler"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "enumeration-2",
+   "group": "list_format",
+   "variant_of": "enumeration",
+   "title": "明确的“第一、第二、第三”排成列表",
+   "raw": "上线前做三件事，第一，备份数据库，第二，关掉定时任务，第三，通知客服。",
+   "gt": "上线前做三件事：\n1. 备份数据库\n2. 关掉定时任务\n3. 通知客服",
+   "must": [
+    "1. 备份数据库",
+    "3. 通知客服"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "enumeration-3",
+   "group": "list_format",
+   "variant_of": "enumeration",
+   "title": "明确的“第一、第二、第三”排成列表",
+   "raw": "流程是这样的：首先，提交申请；其次，等审批；最后，归档。",
+   "gt": "流程是这样的：\n1. 提交申请\n2. 等审批\n3. 归档",
+   "must": [
+    "1. 提交申请",
+    "3. 归档"
+   ],
+   "must_not": []
+  },
+  {
+   "id": "enumeration-4",
+   "group": "list_format",
+   "variant_of": "enumeration",
+   "title": "“第一次”“第二天”不是列表",
+   "raw": "第一次用的时候，第二天就坏了。",
+   "gt": "第一次用的时候，第二天就坏了。",
+   "must": [
+    "第一次",
+    "第二天"
+   ],
+   "must_not": []
+  }
+ ]
+}
