@@ -486,12 +486,14 @@ class Engine:
             c = settings["cloud"]
             try:
                 cloud = chat_client(c.get("protocol", "openai"), c.get("base_url", ""), c.get("model", ""), c.get("api_key", ""), c.get("headers"))
-                timeout = min(20.0, max(8.0, float(c.get("timeout_seconds", 8)) * 1.5))
+                timeout = min(15.0, max(8.0, float(c.get("timeout_seconds", 8)) * 1.5))
             except ValueError:
                 cloud = None
         local = local_translator(self.editor.model, self.editor.tokenizer, self.editor.mx)
+        # The app waits 60 s for a translated dictation; cleanup, the cloud try
+        # and the local fallback must fit inside it.
         def local_bounded(messages, max_tokens, _):
-            return local(messages, max_tokens, 20)
+            return local(messages, max_tokens, 15 if cloud else 20)
         try:
             translated, meta = translate(text, settings.get("target", "auto"), cloud, local_bounded, timeout)
         except Exception as error:
