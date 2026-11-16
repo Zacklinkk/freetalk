@@ -30,8 +30,13 @@ class EditingTests(unittest.TestCase):
             self.assertEqual(self.edit(raw,word,''), raw)
 
     def test_repair_keeps_whole_corrected_suffix(self):
+        # One edit that deletes the old value and the cue is checked as a repair;
+        # the spoken 十二个 still counts 样本.
         raw='先用十个样本，不对，改成十二个。'
-        self.assertEqual(self.edit(raw,'十个样本，不对，改成十二个','十二个'), '先用十二个。')
+        self.assertEqual(self.edit(raw,'十个样本，不对，改成十二个','十二个'), '先用十二个样本。')
+        # The same words inside a clause are a judgment or an instruction.
+        for raw,old,new in [('这个结果不对，需要检查。','结果不对，需要','需要'),('把周一改成周三。','周一改成周三','周三')]:
+            self.assertEqual(self.edit(raw,old,new), raw)
         raw='先用3条不对用1条但不要删除。'
         self.assertEqual(self.edit(raw,raw,'用1条'),raw)
         raw='我觉得应该是12个。'
@@ -54,7 +59,7 @@ class EditingTests(unittest.TestCase):
     def test_layout_retains_every_sentence(self):
         raw='第一，保留意思。第二，不删除细节。最后再确认。'
         text,_=apply_plan(raw,{'edits':[],'breaks':[],'bullets':[0,1]}, {})
-        self.assertEqual(text,'- 第一，保留意思。\n- 第二，不删除细节。\n最后再确认。')
+        self.assertEqual(text,'1. 保留意思\n2. 不删除细节\n最后再确认。')
 
     def test_numbers_and_conditions(self):
         self.assertEqual(guard_edit('上限90秒，预算15分钟','上限90秒，预算50分钟'),'number_change')

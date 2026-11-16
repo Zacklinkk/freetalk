@@ -67,10 +67,10 @@ class DisfluencyTests(unittest.TestCase):
         self.assertEqual(guard_edit('不对，预算是100，保留12个样本。','不对，预算是100，保留99个样本。'),'number_change')
     def test_intro_colon_list_is_structured(self):
         raw='我想测试：第一，保留原意；第二，不要删掉细节。好吧，你觉得可以吗？'
-        self.assertEqual(simple_layout(raw),'我想测试：\n- 第一，保留原意；\n- 第二，不要删掉细节。\n好吧，你觉得可以吗？')
+        self.assertEqual(simple_layout(raw),'我想测试：\n1. 保留原意\n2. 不要删掉细节\n好吧，你觉得可以吗？')
 
     def test_clear_parallel_layout(self):
-        self.assertEqual(simple_layout('第一，保留原意。第二，保留细节。好吗？'),'- 第一，保留原意。\n- 第二，保留细节。\n好吗？')
+        self.assertEqual(simple_layout('第一，保留原意。第二，保留细节。好吗？'),'1. 保留原意\n2. 保留细节\n好吗？')
 
     def test_number_only_broad_model_plan_keeps_original_noun(self):
         raw='先保留十个测试样本。不对，刚才说错了。改成十二个样本。不要删掉日志。'
@@ -96,6 +96,6 @@ class DisfluencyTests(unittest.TestCase):
     def test_explicit_list_does_not_turn_every_sentence_into_a_bullet(self):
         raw='先说明背景。第1，保存草稿。第2，保留细节。最后再确认。'
         text,_=apply_plan(raw,{'edits':[],'breaks':[],'bullets':[0,1,2,3]}, {})
-        self.assertEqual(text,'先说明背景。\n- 第1，保存草稿。\n- 第2，保留细节。\n最后再确认。')
+        self.assertEqual(text,'先说明背景。\n1. 保存草稿\n2. 保留细节\n最后再确认。')
 
 if __name__=='__main__':unittest.main()

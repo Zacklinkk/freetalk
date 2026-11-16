@@ -11,14 +11,16 @@ def normalize_context(data):
     nearby = str(data.get('nearby', ''))[:1800]
     personal = personal_terms(data.get('personal_terms', []))
     terms, seen = [], {term.casefold() for term in personal}
-    for match in re.finditer(r'(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9_+.#/-]{1,39}', initial + '\n' + latest + '\n' + title + '\n' + nearby):
-        term = match.group(0).rstrip('./')
-        if term.casefold() not in seen:
-            terms.append(term)
-            seen.add(term.casefold())
+    # Terms seen only in the visible text are marked: like that text, they stay on this Mac.
+    for text, source in ((initial + '\n' + latest + '\n' + title, None), (nearby, 'visible')):
+        for match in re.finditer(r'(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9_+.#/-]{1,39}', text):
+            term = match.group(0).rstrip('./')
+            if term.casefold() not in seen:
+                terms.append((term, source))
+                seen.add(term.casefold())
     # Explicit personal spellings plus observed context; no fixed project word list.
     return {'initial': initial, 'latest': latest, 'app':app, 'scene':scene, 'window_title':title, 'nearby':nearby,
             'personal_terms': personal,
             'layout_policy': 'paragraphs' if data.get('layout_policy') == 'paragraphs' else 'minimal',
             'personal_aliases': personal_aliases(data.get('personal_aliases', []), personal),
-            'terms': [{'term': t, 'source': 'personal'} for t in personal] + [{'term': t} for t in terms[:24]]}
+            'terms': [{'term': t, 'source': 'personal'} for t in personal] + [{'term': t, **({'source': s} if s else {})} for t, s in terms[:24]]}

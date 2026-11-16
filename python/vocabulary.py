@@ -6,6 +6,13 @@ MAX_PERSONAL_TERMS = 200
 MAX_ACTIVE_TERMS = 48
 TOKEN = re.compile(r'(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_+.#/-]{1,39}')
 LETTERS = re.compile(r'(?<![A-Za-z0-9_])[A-Za-z0-9](?:[ \t]+[A-Za-z0-9]){1,23}(?![A-Za-z0-9_])')
+# Capital letters read out one by one: "S F T" is SFT, "L L M" is LLM. A run
+# followed by a count ("A B C 三个选项") names separate options and stays.
+SPELLED = re.compile(r'(?<![A-Za-z0-9_])(?:[A-Z]|[a-z](?=(?:[ \t][A-Z]){2}))(?:[ \t][A-Z]){1,7}(?![A-Za-z0-9_])')
+OPTION_COUNT = re.compile(r'[ \t]*(?:[两三四五六七八九十几]|\d)+[ \t]*(?:个|种|项|类|组|档|级|部分|选项)')
+# Device names the recognizer writes as a transliteration, only where the
+# reading is clear: 下载到我的麦克上 is a Mac, 麦克风 is a microphone.
+LOANWORDS = [(re.compile(r'(?:(?<=的)|(?<=台)|(?<=到)|(?<=在)|(?<=用))麦克(?=上(?![周次午班个月线来去台面传楼车学课])|电脑|笔记本|系统)'), 'Mac')]
 
 
 def personal_terms(values):
@@ -104,8 +111,67 @@ def normalize_spelling(raw, context):
         count += 1
         return known[key]
     text = LETTERS.sub(replace, raw)
+    spans = [(m.start(), m.end()) for m in LITERALS.finditer(text)]
+    def join(match):
+        nonlocal count
+        letters = re.sub(r'[ \t]', '', match[0]).upper()
+        # "A B C" are option labels, not an acronym; so are letters before a count.
+        if any(match.start() < b and match.end() > a for a, b in spans) or OPTION_COUNT.match(text, match.end()) or letters == 'ABCDEFGH'[:len(letters)]:
+            return match[0]
+        # "v L M" next to Chinese is VLM; in English text "a B C" stays.
+        neighbors = text[max(0, match.start() - 1):match.start()] + text[match.end():match.end() + 1]
+        if match[0][0].islower() and not any('\u4e00' <= c <= '\u9fff' for c in neighbors):
+            return match[0]
+        count += 1
+        return letters
+    text = SPELLED.sub(join, text)
+    text, cased = personal_casing(text, context)
+    text, loans = loanwords(text)
     text, versions = normalize_known_versions(text, context)
-    return text, count + versions
+    return text, count + cased + loans + versions
+
+
+def personal_casing(raw, context):
+    """Write a personal term with its own capitals: lora → LoRA, sft → SFT.
+
+    Only terms whose capitals are not ordinary sentence case, and only next to
+    Chinese text: inside an English sentence "it" or "can" stay words.
+    """
+    spans = [(m.start(), m.end()) for m in LITERALS.finditer(raw)]
+    count = 0
+    for term in context.get('personal_terms', []):
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9]{1,23}', term) or term in (term.lower(), term.capitalize()):
+            continue
+        if term.isupper() and len(term) < 3:
+            continue
+        def replace(match):
+            nonlocal count
+            if match[0] == term or any(match.start() < b and match.end() > a for a, b in spans):
+                return match[0]
+            before = raw[:match.start()].rstrip(' \t')[-1:]
+            after = raw[match.end():].lstrip(' \t')[:1]
+            if not any('\u4e00' <= c <= '\u9fff' or c in '，。！？；：、' for c in before + after):
+                return match[0]
+            count += 1
+            return term
+        raw = re.sub(r'(?<![A-Za-z0-9_])' + re.escape(term) + r'(?![A-Za-z0-9_])', replace, raw, flags=re.I)
+    return raw, count
+
+
+def loanwords(raw):
+    spans = [(m.start(), m.end()) for m in LITERALS.finditer(raw)]
+    count = 0
+    for pattern, word in LOANWORDS:
+        def replace(match):
+            nonlocal count
+            if any(match.start() < b and match.end() > a for a, b in spans):
+                return match[0]
+            count += 1
+            before = raw[match.start() - 1:match.start()]
+            after = raw[match.end():match.end() + 1]
+            return (' ' if '\u4e00' <= before <= '\u9fff' else '') + word + (' ' if '\u4e00' <= after <= '\u9fff' else '')
+        raw = pattern.sub(replace, raw)
+    return raw, count
 
 
 def normalize_known_versions(raw, context):
@@ -145,7 +211,7 @@ def hotwords(context):
     in the visible context go first, ordered by where they first appear, then
     the rest keep their vocabulary order.
     """
-    background = '\n'.join(context.get(k,'') for k in ('initial','latest','window_title','nearby'))
+    background = '\n'.join(context.get(k,'') for k in ('initial','latest','after','selected','window_title','nearby'))
     terms = list(dict.fromkeys(row['term'] for row in context.get('terms', []) if row.get('term')))
 
     def position(term):
@@ -161,6 +227,20 @@ def hotwords(context):
     rescue = [term for term in asr_rescue_terms(context) if term in rest]
     rest = rescue + [term for term in rest if term not in rescue]
     return (relevant + rest)[:MAX_ACTIVE_TERMS]
+
+
+def loose_sound(syllable):
+    """Pinyin with the usual confusions merged: zh/z, ch/c, sh/s, ang/an, eng/en, ing/in."""
+    return re.sub(r'([aei])ng$', r'\1n', re.sub(r'^([zcs])h', r'\1', syllable))
+
+
+def sounding_runs(text):
+    """Chinese runs of three or more characters with one loose syllable each."""
+    from pypinyin import lazy_pinyin, Style
+    for match in re.finditer(r'[\u4e00-\u9fff]{3,}', LITERALS.sub(' ', text)):
+        sounds = lazy_pinyin(match[0], style=Style.NORMAL)
+        if len(sounds) == len(match[0]):
+            yield match[0], tuple(loose_sound(x) for x in sounds)
 
 
 def spelling_hints(raw, context):
@@ -192,6 +272,31 @@ def spelling_hints(raw, context):
             if grounded_spelling(raw,old,new,context):
                 pairs.append([old,new]);seen.add(key)
                 if len(pairs)>=8:return pairs
+    # Names and terms already written in the input field, the window title or
+    # on screen: 林小峰 → 林晓峰, 下普比率 → 夏普比率. Two characters collide
+    # too often (公司/公式, 时间/实践), so only spans of three or four.
+    background = '\n'.join(context.get(k, '') for k in ('initial', 'latest', 'after', 'selected', 'window_title', 'nearby'))
+    if background.strip():
+        index = {}
+        for run, sounds in sounding_runs(background):
+            for size in (4, 3):
+                for i in range(len(run) - size + 1):
+                    index.setdefault(sounds[i:i + size], set()).add(run[i:i + size])
+        for run, sounds in sounding_runs(raw[:1200]):
+            for size in (4, 3):
+                for i in range(len(run) - size + 1):
+                    old = run[i:i + size]
+                    if old in background:
+                        continue
+                    for new in sorted(index.get(sounds[i:i + size], ())):
+                        key = tuple(sorted((old, new)))
+                        # A longer pair already covers this one: 林小峰 covers 小峰.
+                        covered = any(a.find(old) >= 0 and a.find(old) == b.find(new) for a, b in pairs)
+                        if new == old or key in seen or covered or not grounded_spelling(raw, old, new, context):
+                            continue
+                        pairs.append([old, new]); seen.add(key)
+                        if len(pairs) >= 8:
+                            return pairs
     # A learned pair is context, not a rule: surface it so the model can weigh
     # it against this utterance. Without this the editor never learns that a
     # correction exists, and its own grounded spelling edit is then refused.

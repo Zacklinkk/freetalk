@@ -8,6 +8,10 @@ from disfluency import LITERALS, START_CUE, EN_CUE, RESTART_HEAD, JOINED_CUE, ad
 def core(text):
     return re.sub(r'[\W_]', '', text).lower()
 
+# How a spoken list item starts: 第一，/第二步，/首先，/其次，/一是. 最后，
+# continues a list but never starts one (see explicit_list_ids).
+LIST_ITEM = r'(?:第[一二三四五六七八九十0-9]+步?[，,、]|首先[，,、]|其次[，,、]|最后[，,、]|一是|二是|三是)'
+
 def split_units(raw):
     spans=[(m.start(),m.end()) for m in LITERALS.finditer(raw)]
     def outside(pos):return not any(a<=pos<b for a,b in spans)
@@ -17,7 +21,7 @@ def split_units(raw):
         end=m.end()
         while end<len(raw) and raw[end] in '”’」』':end+=1
         cuts.add(end)
-    markers=[m.start() for m in re.finditer(r'(?:第[一二三四五六七八九十0-9]+[，,、]|首先[，,、]|其次[，,、]|一是|二是|三是)',raw) if outside(m.start()) and (m.start()==0 or raw[m.start()-1] in '：:，,。；;\n ')]
+    markers=[m.start() for m in re.finditer(LIST_ITEM,raw) if outside(m.start()) and (m.start()==0 or raw[m.start()-1] in '：:，,。；;\n ')]
     if len(markers)>=2:cuts.update(markers)
     points=sorted(cuts)
     return [raw[a:b] for a,b in zip(points,points[1:]) if a<b]
@@ -99,10 +103,8 @@ def allowed(old, new, context):
     a, b = core(old), core(new)
     if a == b: return True
     if any(marker in a and marker not in b for marker in PROTECTED): return False
-    # Legacy same-span repair plans remain readable; new plans use explicit evidence.
-    repair = re.search(r'不对|我是说|说错了', a)
-    repaired = re.sub(r'^(?:改成|应该是)', '', a[repair.end():]) if repair else ''
-    if repair and b and b == repaired: return True
+    # A repair written as one edit is checked by edit_as_repair and validate_repair,
+    # never accepted here: 这个结果不对，需要 is a judgment, not a correction.
     if not b and re.fullmatch(r'[嗯呃额啊哦]+|u+m+|u+h+', a): return True
     if b and a == b * 2 and (stutter_span(b) or (len(b) >= 5 and not re.search(r'非常|一定|千万|强调|真的|太', b))): return True
     if b and re.sub(r'^(?:嗯|呃|额|啊)+', '', a) == b: return True
@@ -153,10 +155,12 @@ def removes_particle(raw, old, new, start):
             if ambiguous_filler(raw, raw[left:right], '', left, right): return True
     return False
 
-def contextual_cleanup(raw, old, new, start, kind):
+def contextual_cleanup(raw, old, new, start, kind, scene=''):
     """Model decides discourse role; validation limits the edits to local deletions.
 
     This is not a global filler blacklist. Lexical mentions and quotations stay data.
+    In a chat with a person (scene "conversation") a clause-final 啊/呀 is the
+    tone of the message, not a pause.
     """
     # Treat kind as a model hint, not as the authority. A deletion that passes
     # the same discourse/token checks is safe even if tagged spelling/stutter.
@@ -169,29 +173,81 @@ def contextual_cleanup(raw, old, new, start, kind):
     if re.search(r'口水词|语气词|填充词|这个词|这个字|词语|字面|例子|表示同意|表示惊讶',sentence):return False
     if core(raw) in {'嗯','啊','对','对呀','对啊','是的'}:return False
     changed=False
+    positions=[n for n,c in enumerate(old) if core(c)]
     for tag,i,j,x,y in difflib.SequenceMatcher(a=a,b=b,autojunk=False).get_opcodes():
         if tag=='equal':continue
         if tag!='delete':return False
         removed=a[i:j]
         if not re.fullmatch(r'(?:那个|这个|这种|那种|就是|然后|怎么说呢|对呀|对啊|对|嗯+|呃+|额|啊+|呀|哦|是的)+',removed):return False
+        left,right=start+positions[i],start+positions[j-1]+1
         if removed=='就是':
-            positions=[n for n,c in enumerate(old) if core(c)]
-            tail=raw[start+positions[j-1]+1:]
-            if not re.match(r'[，,。]|(?:要|需要|希望|可以|能|想|先|再|把|让|请|不|会)',tail):return False
+            tail=raw[right:]
+            # 您好，就是我想跟您确认 is a filler; 答案就是我, 就是我们。 and an
+            # explanation (词库，就是你搜索的资源) are not.
+            opener=re.split(r'[。！？!?\n]',raw[:left])[-1].strip(' ，,')
+            subject=(not opener or GREETING.fullmatch(opener)) and re.match(SUBJECT+r'(?!的)[一-鿿]{2}',tail)
+            if not (re.match(r'[，,。]|(?:要|需要|希望|可以|能|想|先|再|把|让|请|不|会)',tail) or subject):return False
+        if removed=='然后' and sequential_then(raw,left,right):return False
+        # 那个充电宝 points at something; 那个，我们 and 你的那个词库 do not.
+        if removed in {'这个','那个','这种','那种'} and not (raw[right:right+1] in ('，',',','、',' ') or raw[left-1:left]=='的'
+                                                       or raw[right:right+2]==removed or raw[max(0,left-2):left]==removed):return False
+        # In a chat the particles and the agreement are the tone of the message.
+        if scene=='conversation' and (removed in {'对呀','对啊'} or re.fullmatch(r'[啊呀哦]+',removed) and left and core(raw[left-1])):return False
         changed=True
     return changed
+
+def within_phrase(raw, start):
+    """Where a hesitation's deletion starts: at the comma before it when that
+    comma only marks the pause inside one phrase, otherwise at the hesitation.
+
+    把这个需求，呃，过一遍 is one phrase: the 把 object still needs its verb,
+    and a preposition such as 向/从/给 still needs its object. 弄完，呃，然后
+    再说 is two, and so is 逻辑上，呃，转换的逻辑上, a restatement.
+    """
+    if not start or raw[start-1] not in '，,':return start
+    clause=re.split(r'[，,。！？!?；;\n]',raw[:start-1])[-1]
+    after=re.sub(r'^(?:[呃嗯额]+[，,、\s]*)+','',raw[start:])
+    if not clause or not after or re.match(SUBJECT+r'|然后|但是|但|所以|而且|不过|因为|如果|那么|那|这|就|还是|或者|不是|不对',after):return start
+    object_only=re.search(r'[把将][^把将]{1,12}$',clause) and not re.search(r'[了完好掉过着到成走]$',clause)
+    # 我们下午，呃，先开个短会 / 定在下午，嗯，三点: a time phrase waiting for its predicate.
+    time=re.search(r'(?:上午|下午|中午|晚上|早上|凌晨|今天|明天|昨天|后天|前天|今晚|明早|周[一二三四五六日天]|星期[一二三四五六日天]|这周|下周|月底|年底)$',clause)
+    return start-1 if object_only or time or re.search(r'[地向从往被比跟给把将]$',clause) else start
+
+SUBJECT=r'(?:我们|你们|他们|她们|咱们|大家|我|你|您|他|她)'
+GREETING=re.compile(r'(?:[嗯呃额啊]+[，,]?)?[一-鿿]{0,6}(?:您好|你好|大家好|早上好|上午好|下午好|晚上好|早安|哈喽|老师好|经理好|总好|各位好|领导好)')
+
+def sequential_then(raw, left, right):
+    """Whether a bare 然后 marks a real next step and must stay.
+
+    At the start of a dictation it continues what is already in the field;
+    after a clause in the same sentence it orders two actions (过一遍，然后再定).
+    """
+    if not raw[:left].strip():return True
+    clause=re.split(r'[。！？!?\n]',raw[:left])[-1].rstrip(' ，,')
+    redundant=re.match(r'[，,\s]*(?:中间|最后|之后|接下来)',raw[right:]) or clause in {'我们','我','你','大家'}
+    return bool(clause) and not redundant
 
 @lru_cache(maxsize=2048)
 def phonetic_syllables(word):
     from pypinyin import lazy_pinyin, Style
     return tuple(lazy_pinyin(word,style=Style.NORMAL))
 
+def spelling_sources(raw, context, new=''):
+    """Text that can show how a word is spelled: this dictation, the input
+    field and the vocabulary; for words of three or more characters also the
+    window title and the visible text on screen. A screen shows many unrelated
+    two-character words (公司 next to a spoken 公式), so those need closer evidence."""
+    sources=[raw]+[context.get(k,'') for k in ('initial','latest','after','selected')]+[x['term'] for x in context.get('terms',[])]
+    return sources+([context.get('window_title',''),context.get('nearby','')] if len(new)>=3 else [])
+
+# A homophone edit may never change one of these: 一明→一鸣 is a name, 十个→四个 is a number.
+GUARDED = set('不没无非零一二两三四五六七八九十')
+
 def grounded_spelling(raw, old, new, context):
     """A proposed homophone must be short, sound alike and occur in supplied data."""
     if not re.fullmatch(r'[\u4e00-\u9fff]{2,8}',old) or not re.fullmatch(r'[\u4e00-\u9fff]{2,8}',new) or len(old)!=len(new):return False
-    sources=[raw,context.get('initial',''),context.get('latest','')]+[x['term'] for x in context.get('terms',[])]
-    if not any(new in s for s in sources):return False
-    if any(w in old+new for w in ['不','没','无','非','零','一','二','两','三','四','五','六','七','八','九','十']):return False
+    if not any(new in s for s in spelling_sources(raw,context,new)):return False
+    if any(a!=b and (a in GUARDED or b in GUARDED) for a,b in zip(old,new)):return False
     try:
         a,b=phonetic_syllables(old),phonetic_syllables(new)
     except ImportError:return False
@@ -338,24 +394,43 @@ def preclean(raw, context=None):
         if not particle and removes_particle(raw,raw[start:end],new,start): return
         patches.append((start,end,new))
     for m in re.finditer(r'呃+(?!逆)[，,、 \t]*',raw):
-        if m.end()<len(raw): add(m.start(),m.end(),'')
+        if m.end()<len(raw): add(within_phrase(raw,m.start()),m.end(),'')
+    # A hesitation before the subject: 那个，我们先… The demonstrative points
+    # at nothing; 那个文件 has no comma and is not touched.
+    for m in re.finditer(r'(?:^|(?<=[。！？!?\n]))(?:(?:嗯+|呃+|额|啊)[，,]\s*)*(?P<filler>那个[，,]\s*)(?='+SUBJECT+')',raw):
+        add(m.start('filler'),m.end(),'')
     # Long declarative clauses often end in a non-content particle. Standalone
-    # responses and lexical/quoted mentions remain protected above.
+    # responses and lexical/quoted mentions remain protected above. In a chat
+    # with a person the particle is the tone of the message and stays.
     for m in re.finditer(r'[啊呀]+(?=[，,。！!；;]|$)',raw):
+        if (context or {}).get('scene')=='conversation':break
         clause=re.split(r'[，,。！？!?；;\n]',raw[:m.start()])[-1]
         if len(core(clause))>=6 and not re.search(r'发出|喊出|读作|写作|唱出',clause):add(m.start(),m.end(),'',particle=True)
+    # 然后就是 after a clause keeps 然后, which orders the two steps
+    # (过一遍，然后就是，再定排期 → 过一遍，然后再定排期); alone it is a filler.
     for m in re.finditer(r'(^|[，,。！？!?])(?P<filler>(?:对[呀啊]?[，,。]\s*)?(?:然后就是|就是然后)[，,。]\s*)',raw):
-        if m.end()<len(raw):add(m.start('filler'),m.end(),'')
+        step=m[1] in ('','，',',') and not m['filler'].startswith('对')
+        if m.end()<len(raw):add(m.start('filler'),m.end(),'然后' if step else '')
     # A broken transition followed by the same transition is a restart, not a
     # second chronological step. Keep the surrounding sentences and their data.
     for m in re.finditer(r'(^|[，,。！？!?])(?P<filler>然后[，,。]\s*(?:对[呀啊]?[，,。]\s*)?然后)[，,]?\s*',raw):
         if m.end()<len(raw):add(m.start('filler'),m.end(),'')
+    # "Um, so I think…": a hesitation and "so" before the subject. The sentence
+    # starts at the subject, capitalized. "So I think" without the hesitation
+    # may continue earlier text, like 然后, and stays.
+    for m in re.finditer(r"(?:^|(?<=[.!?]\s))(?:(?:um+|uh+)[,\s]+)+(?P<lead>so\s*,?\s+)(?P<first>(?:I|we|you|they|he|she|it|let's)\b)",raw,re.I):
+        add(m.start('lead'),m.start('first')+1,m['first'][0].upper())
     for m in re.finditer(r'(?<![\w])[Uu][Mm]+[,\s]*|(?<![\w])[Uu][Hh]+[,\s]*|嗯+[，,、 \t]*|额[，, \t]+|哦',raw):
         if m.end()<len(raw):
-            start=m.start(); replacement=''
-            if m.group(0).lower().startswith(('um','uh')) and re.search(r',\s*$',raw[:start]):
+            start=within_phrase(raw,m.start()) if m[0][0] in '嗯额' else m.start(); end=m.end(); replacement=''
+            english=m.group(0).lower().startswith(('um','uh'))
+            if english and re.search(r',\s*$',raw[:start]):
                 start=re.search(r',\s*$',raw[:start]).start();replacement=' '
-            add(start,m.end(),replacement)
+            # "uh, let's meet" starts the sentence at "Let's"; iPhone keeps its case.
+            elif english and (not start or re.search(r'[.!?]\s*$',raw[:start])) and re.match(r"[a-z]+(?:'[a-z]+)?\b",raw[end:]) \
+                    and not any(l==end for l,_,_ in patches):
+                replacement=raw[end].upper();end+=1
+            add(start,end,replacement)
     for m in re.finditer(r'(?P<word>我们|你们|他们|它们|这个|那个|这种|那种|使用|进行|处理|我|你|这|那|更)(?P=word)+',raw):
         if len(m.group('word')) == 1 and word_boundary(raw, m.start()): continue
         add(m.start(),m.end(),m.group('word'))
@@ -387,12 +462,94 @@ def preclean(raw, context=None):
             add(m.start(),m.end(),m.group('clause'))
     text=replace_spans(raw,patches)
     text, stops = repair_false_stops(text)
-    return text,len(patches)+stops
+    text, asked = listener_questions(text)
+    text, particles = question_particles(text)
+    return text,len(patches)+stops+asked+particles
+
+def question_particles(text):
+    """A sentence that ends in 吗 is a question: 今天能发吗。 → 今天能发吗？
+
+    Only 吗: 没什么。 and 还没呢。 are statements, so 么 and 呢 are left to the model.
+    """
+    patches=[(m.end()-1,m.end(),'？') for m in re.finditer(r'[^。！？!?\n]*吗。',text) if not protected_span(text,m.start(),m.end())]
+    return replace_spans(text,patches),len(patches)
+
+# A question put to the listener as a request: 我想跟您确认一下下周二是不是
+# 还是上午九点。 asks them, so it ends in "？". 我去问一下他是不是要来 only
+# reports a plan and keeps "。"; so does 跟您确认一下，会议改到周三 (no question).
+ASK_LISTENER = re.compile(r'请问(?:一下)?|(?:想|要|需要|再)?(?:跟|向|和|同)(?:您|你)(?:确认|核实|确定|核对|了解)一下|(?:想|要|需要)(?:跟|向|和|同)(?:您|你)(?:确认|核实|确定|核对)(?![过了一])'
+                          r'|问(?:您|你)一下|想问(?![他她它]|一下[他她它])(?:一下)?|麻烦(?:您|你)(?:确认|看|查|核实)一下')
+ASKS = re.compile(r'是不是|能不能|有没有|会不会|要不要|可不可以|行不行|对不对|好不好|是否|什么|怎么|为什么|为何|哪|谁|多少|几[点个天次号位]|吗|呢|还是')
+
+def listener_questions(text):
+    """End a request to the listener in "？" when what follows it asks something.
+
+    The question must be the last clause of the sentence: 请问这个接口什么时候
+    能好，我这边等着用。 ends in a statement and keeps "。".
+    """
+    patches=[]
+    for m in re.finditer(r'[^。！？!?\n]+。',text):
+        ask=ASK_LISTENER.search(m[0])
+        if not ask or protected_span(text,m.start(),m.end()):continue
+        rest=m[0][ask.end():-1]
+        clause=rest.lstrip('，,：: ')
+        if not clause or re.search(r'[，,；;：:]',clause):continue
+        # 还是 alone is "still"; it asks only as 是A还是B.
+        found=[x[0] for x in ASKS.finditer(clause)]
+        if not found or found==['还是'] and not re.search(r'是.+还是',clause):continue
+        # A pause after 确认一下 before a long question clause.
+        if re.search(r'(?:确认|核实|确定|核对)一下$',ask[0]) and clause==rest and len(core(clause))>=8:
+            patches.append((m.start()+ask.end(),m.start()+ask.end(),'，'))
+        patches.append((m.end()-1,m.end(),'？'))
+    return replace_spans(text,patches),len(patches)
+
+def edit_as_repair(raw, old, new):
+    """The repair a model wrote as one edit, or None.
+
+    Small models often return a self-correction as an edit that deletes the
+    old value together with the cue: "Friday, no wait, Monday" → "Monday",
+    "周四下午，不对，周五上午" → "周五上午". Read it as that repair so the same
+    evidence checks apply; the edit itself would only be refused.
+    """
+    if raw.count(old) != 1:
+        return None
+    ops = [op for op in difflib.SequenceMatcher(a=old, b=new, autojunk=False).get_opcodes() if op[0] != 'equal']
+    if len(ops) != 1 or ops[0][0] != 'delete':
+        return None
+    _, i, j, _, _ = ops[0]
+    deleted, base = old[i:j], raw.index(old)
+    for k in range(1, len(deleted)):
+        fragment = deleted[k:]
+        marker = START_CUE.fullmatch(fragment) or EN_CUE.fullmatch(fragment)
+        target = deleted[:k].strip(' \t，,')
+        if not marker or not core(target) or not core(fragment):
+            continue
+        after = old[j:]
+        phrase = re.split(r'[，,。.!！?？;；]', after, maxsplit=1)[0].strip()
+        if not core(phrase):
+            return None
+        end = after.index(phrase) + len(phrase)
+        cue = fragment + after[:end]
+        # The comma before an English cue belongs to it: ", sorry, four".
+        if not (correction_signal(cue) or correction_signal(raw[max(0, base + i + k - 2):base + i + k] + cue)):
+            return None
+        return {'old': target, 'new': phrase, 'cue': cue}
+    return None
+
+def cue_starts_clause(raw, start, fragment):
+    """A correction cue opens a clause: 周四下午，不对，周五. Inside a clause the
+    same words are content: 这个结果不对 is a judgment and 把周一改成周三 an
+    instruction. ASR sometimes drops the comma before a cue chain (样本不对，改成)."""
+    return not start or raw[start-1] in ' \t，,。.!！?？;；、：:\n' or bool(JOINED_CUE.match(fragment))
 
 def validate_repair(raw, item, patches):
     if not isinstance(item,dict) or set(item)!={'old','new','cue'}: raise ValueError('Invalid repair')
     old,new,cue=(item[k] for k in ['old','new','cue'])
     if any(not isinstance(v,str) or not v for v in [old,new,cue]): raise ValueError('Invalid repair text')
+    # Some models put the whole correction in old: "Friday, no wait, Monday" → "Monday".
+    if raw.count(old)==1 and correction_signal(old):
+        narrowed=edit_as_repair(raw,old,new)
+        if narrowed: old,new,cue=narrowed['old'],narrowed['new'],narrowed['cue']
     if len(old)>160 or len(new)>160 or len(cue)>240 or raw.count(cue)!=1: return None,'source_not_unique'
     cue_base=raw.index(cue)
     common=0
@@ -404,7 +561,9 @@ def validate_repair(raw, item, patches):
     for offset in starts:
         fragment=cue[offset:]
         marker=START_CUE.match(fragment) or EN_CUE.match(fragment)
-        if not marker or not correction_signal(fragment): continue
+        # The comma before the cue is part of it: ", sorry, four" is a correction, "Sorry, I" is not.
+        if not marker or not (correction_signal(fragment) or correction_signal(raw[max(0,cue_base+offset-2):cue_base+offset]+fragment)): continue
+        if not cue_starts_clause(raw,cue_base+offset+len(fragment)-len(fragment.lstrip(' \t，,。.!！?？;；、')),fragment.lstrip(' \t，,。.!！?？;；、')): continue
         tail=fragment[marker.end():]
         for trim in range(common+1):
             candidate=new[trim:].strip(' \t\r\n，,。.!！?？;；')
@@ -422,6 +581,14 @@ def validate_repair(raw, item, patches):
                 suffix=re.split(r'[\s，,。.!！?？;；]',rest,1)[0]
                 if not raw[right:].startswith(suffix):continue
                 consumed+=len(suffix)
+            elif rest[:1].isspace() and re.search(r'[A-Za-z0-9]$',target):
+                # "five servers, I mean six servers for the demo": words the
+                # correction repeats from after the old value belong to it.
+                said=re.findall(r'\s+[^\s,.;:!?]+',rest)
+                kept=re.findall(r'\s+[^\s,.;:!?]+',re.split(r'[,.;:!?]',raw[right:],1)[0])
+                for a,b in zip(said,kept):
+                    if a.strip().lower()!=b.strip().lower():break
+                    consumed+=len(a)
             ce=cs+marker.end()+consumed
             if cs-right>900: continue
             found=(left,right,candidate,cs,ce,target);break
@@ -440,7 +607,7 @@ def validate_repair(raw, item, patches):
     # Remove the pause before the cue too, except a sentence boundary that still
     # separates unrelated earlier information. Keep the correction's final punctuation.
     if cs>right and re.fullmatch(r'[，,。.!！?？;；\s]*',raw[right:cs]): cs=right
-    elif cs and raw[cs-1] in '，,': cs-=1
+    elif cs and raw[:cs].rstrip(' \t')[-1:] in ('，',','): cs=len(raw[:cs].rstrip(' \t'))-1
     candidates=[(left,right,new),(cs,ce,'')]
     if any(l<r0 and r>l0 for l,r,_ in candidates for l0,r0,_ in patches): return None,'overlap'
     return candidates,None
@@ -647,17 +814,23 @@ def apply_plan(raw, plan, context):
         # Some models put the already-adjacent suffix in new instead of leaving
         # it outside old. Recover only an independently valid filler deletion;
         # never duplicate that suffix or reinterpret a substantive replacement.
-        if start>=0 and new and raw[end:].startswith(new) and contextual_cleanup(raw,old,'',start,edit.get('kind')):
+        if start>=0 and new and raw[end:].startswith(new) and contextual_cleanup(raw,old,'',start,edit.get('kind'),context.get('scene','')):
             new=''
         # Models often drop the closing mark when an edit reaches the end of
         # the dictation; the speaker still ended the sentence.
         if not reason and end==len(raw) and new and old[-1] in '。！？!?' and new[-1] not in '。！？!?…':
             new=new.rstrip('，,、；;：: ')+old[-1]
             if new==old: continue
+        if not reason and core(old)!=core(new):
+            repair=edit_as_repair(raw,old,new)
+            if repair:
+                candidates,failure=validate_repair(raw,repair,patches)
+                if candidates and not failure:
+                    patches.extend(candidates);groups.append((candidates[0],candidates[1]));repair_count+=1;continue
         if not reason and core(old)==core(new) and old!=new:reason=punctuation_problem(raw,old,new,start)
         if not reason and protected_span(raw,start,end):reason='literal_span'
         if not reason and rewrites_learned_alias(raw,old,new,start,end,context):reason='learned_alias_requires_audio'
-        discourse=contextual_cleanup(raw,old,new,start,edit.get('kind'))
+        discourse=contextual_cleanup(raw,old,new,start,edit.get('kind'),context.get('scene',''))
         repetition=repetition_cleanup(raw,old,new,start)
         spelling=edit.get('kind')=='spelling' and grounded_spelling(raw,old,new,context)
         if not spelling and edit.get('kind')=='spelling':
@@ -701,7 +874,8 @@ def apply_plan(raw, plan, context):
         breaks = accepted
     bullets = set(explicit) if len(explicit) >= 2 else set()
     if len(bullets)<2:bullets=set()
-    rendered=''
+    from numerals import integer
+    rendered='';number=0;listed=0
     for i,text in enumerate(outputs):
         if not core(text):
             if i in untouched:
@@ -711,14 +885,33 @@ def apply_plan(raw, plan, context):
                 rendered+=punctuation[0]
             continue
         if i in bullets:
+            # A numbered list: "1. 补齐单测". The spoken ordinal becomes the
+            # number, its comma and the item's closing mark go, and the
+            # sentence that introduces the list ends in a colon.
+            # Sentences between two items continue the earlier item on its line.
+            marker=LIST_MARKER.match(text)
+            spoken=re.match(r'\s*第([一二三四五六七八九十0-9]+)',text)
+            value=(spoken[1] if spoken[1].isdigit() else integer(spoken[1])) if spoken else None
+            number=int(value) if value else number+1
+            if not listed and rendered.rstrip(' \t')[-1:] in ('，',',','、','：',':'):
+                rendered=rendered.rstrip(' \t')[:-1]+'：'
+            listed+=1
             if rendered and not rendered.endswith('\n'):rendered+='\n'
-            rendered+='- '+text.strip()+'\n'
+            item=(text[marker.end():] if marker else text).strip()
+            following=min((b for b in bullets if b>i),default=i+1)
+            continued=any(core(outputs[j]) for j in range(i+1,following))
+            rendered+=f'{number}. '+(item if continued else item.rstrip('，,、；;。.')+'\n')
         else:rendered+=text
         if i in breaks and rendered and not rendered.endswith('\n\n'):rendered+='\n\n'
     return rendered.strip(), {'applied_edits':len(patches),'repair_count':repair_count,'restart_count':restart_count,'rejected_edits':rejected,'guard_source':guard_source,'plan':plan}
 
+LIST_MARKER = re.compile(r'^\s*'+LIST_ITEM+r'\s*')
+
 def explicit_list_ids(units):
-    return [i for i,s in enumerate(units) if re.match(r'^\s*(?:第[一二三四五六七八九十0-9]+[，,、]|首先[，,、]|其次[，,、]|一是|二是|三是)',s)]
+    ids=[]
+    for i,s in enumerate(units):
+        if LIST_MARKER.match(s) and not (s.lstrip().startswith('最后') and (not ids or ids[-1]!=i-1)):ids.append(i)
+    return ids
 
 def simple_layout(raw):
     units=split_units(raw)

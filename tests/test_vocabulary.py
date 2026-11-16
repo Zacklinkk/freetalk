@@ -23,8 +23,12 @@ class VocabularyTests(unittest.TestCase):
         self.assertEqual(self.normalize('用 A P I。', latest='API 的调用'), '用 API。')
         self.assertEqual(self.normalize('用 O p e n A I。', personal_terms=['OpenAI']), '用 OpenAI。')
 
-    def test_unknown_and_partial_acronyms_are_not_guessed(self):
-        for text in ['版本 A B C。', '测试 S F X。', '测试 S F T R。', '编号1 2 3。', '测试 S\nF\nT。']:
+    def test_spelled_capitals_join_but_option_letters_and_digits_stay(self):
+        # Capitals read out one by one are one acronym even when it is not in
+        # the vocabulary; the letters are kept as spoken, never completed.
+        for text, expected in [('先做 S F T，再看 L L M 的结果。', '先做 SFT，再看 LLM 的结果。'), ('测试 S F X。', '测试 SFX。'), ('测试 S F T R。', '测试 SFTR。')]:
+            self.assertEqual(self.normalize(text, personal_terms=['SFT']), expected)
+        for text in ['版本 A B C。', '选 A B 两个方案。', '有 X Y Z 三种情况。', '编号1 2 3。', '测试 S\nF\nT。']:
             self.assertEqual(self.normalize(text, personal_terms=['SFT']), text)
 
     def test_quotes_code_and_urls_are_literal(self):

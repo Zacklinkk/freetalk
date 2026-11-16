@@ -110,6 +110,19 @@ class RepairBoundaryTests(unittest.TestCase):
         self.assertFalse(unresolved_correction('先用十二个样本。保留所有日志。'))
 
 
+class EnglishRepairCueTests(unittest.TestCase):
+    """English self-corrections route to the editor; ordinary phrases do not."""
+
+    def test_cues(self):
+        from disfluency import correction_signal
+        for text in ['ship it on Friday, no wait, Monday.', "meet at three, sorry, four o'clock.", 'five servers, I mean six servers', 'Anna, wait, no, Maria']:
+            with self.subTest(text=text):
+                self.assertTrue(correction_signal(text))
+        for text in ['There is no wait time.', 'Sorry for the delay.', 'Yes, sorry, I missed it.', 'No, sorry, we are closed.']:
+            with self.subTest(text=text):
+                self.assertFalse(correction_signal(text))
+
+
 class AliasHygieneTests(unittest.TestCase):
     """Aliases with punctuation or whitespace can never match a transcript."""
 

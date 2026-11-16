@@ -210,6 +210,20 @@ class CloudRoutingTests(unittest.TestCase):
         e.edit(RAW, context, policy='always')
         self.assertIn('VISIBLE-WINDOW-SECRET', e.local_calls[0])
 
+    def test_terms_and_spellings_from_visible_text_stay_local_too(self):
+        from context import normalize_context
+        cloud = remote(json.dumps(PLAN, ensure_ascii=False))
+        context = normalize_context({'window_title': '周报', 'latest': '用 LoRA 训练',
+                                     'nearby': '老陈：Secretproj 回测跑完了，夏普比率 1.8'})
+        editor(cloud).edit('这个下普比率，不对，十个样本还行。', context, policy='always')
+        self.assertNotIn('Secretproj', cloud.sent[0])
+        self.assertNotIn('夏普比率', cloud.sent[0])
+        self.assertIn('LoRA', cloud.sent[0])
+        e = editor(remote(error='network'))
+        e.edit('这个下普比率，不对，十个样本还行。', context, policy='always')
+        self.assertIn('Secretproj', e.local_calls[0])
+        self.assertIn('夏普比率', e.local_calls[0])
+
     def test_output_never_starts_with_a_stray_comma(self):
         # The plan the local model produced for this sentence: drop the filler,
         # leave its comma. The comma must not reach the text field.

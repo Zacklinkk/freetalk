@@ -5,7 +5,7 @@ import re
 # These patterns identify a repair cue, not permission to delete earlier content.
 CUE = r'(?:不对|不是|我是说|(?:刚才|前面|之前)?[\u4e00-\u9fff]{0,8}说错了|更正一下|纠正一下|改口|改成|改为|准确地说|应该改为)'
 START_CUE = re.compile(r'^(?:[\s，,。.!！?？、]*(?:呃+|嗯+|啊|哦|不对|我是说|(?:刚才|前面|之前)?[\u4e00-\u9fff]{0,8}说错了|更正一下|纠正一下|改口|改成|改为|应该是|应该改为|准确地说|而是))+[\s，,。.!！?？、]*')
-EN_CUE = re.compile(r'^(?:\s*[,.;!?]?\s*(?:uh|um|no|sorry|actually|I mean|make that|scratch that)\b)+[\s,.;:]*', re.I)
+EN_CUE = re.compile(r'^(?:\s*[,.;!?]?\s*(?:uh|um|no|wait|sorry|actually|I mean|I meant|or rather|rather|make that|scratch that)\b)+[\s,.;:]*', re.I)
 RESTART_HEAD = re.compile(r'^[\s，,。]*(?:(?:哎|唉|呃+|嗯+)[，,\s]*)*(?:算了(?:吧)?|(?:我)?(?:重新说|重说)(?:一遍|一下)?|(?:把)?(?:刚才这句|刚才那句|上一句|前面那句|这句|这一句|刚才这段|上一段|这段)(?:话)?(?:不要了|删掉|作废|不算了?))(?:[，,。\s]*(?:我)?(?:重新说|重说)(?:一遍|一下)?)?[，,。\s]*')
 LITERALS = re.compile(r'`[^`]*`|https?://[^\s，。]+|“[^”]*”|「[^」]*」|『[^』]*』|"[^"\n]*"')
 # ASR punctuation is not a reliable boundary: "八份文件不对，改成九份".
@@ -19,7 +19,8 @@ def correction_signal(text):
     text = mask_literals(text)
     # A discussion/example of a correction is not a spoken correction itself.
     return bool(JOINED_CUE.search(text) or re.search(r'(?:^|[，,。.!！?？]\s*)(?:呃+[，,\s]*)?(?:不对|我是说|(?:刚才|前面|之前)[\u4e00-\u9fff]{0,8}说错了|更正一下|纠正一下|改口|改成|改为|准确地说)', text) or
-                re.search(r'\b(?:I mean|make that|scratch that|actually\s*,?\s*no)\b', text, re.I))
+                re.search(r'\b(?:I mean|I meant|make that|scratch that|or rather|actually\s*,?\s*no)\b|(?:^|[,;]\s*)(?:no\s*,?\s*wait|wait\s*,?\s*no)\b'
+                          r'|(?<![Yy]es)(?<![Oo]h)(?<![Oo]kay)(?<![Nn]o)[,;]\s*sorry\s*,', text, re.I))
 
 def adjacent_repetitions(text):
     """Literal restart candidates, not permission to delete them.

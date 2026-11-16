@@ -18,7 +18,7 @@ class LayoutAliasTests(unittest.TestCase):
         self.assertEqual(fallback_layout(raw*15),raw*15)
     def test_explicit_list_kept(self):
         raw='第一，保留原意。第二，保留细节。'
-        self.assertEqual(apply_plan(raw,{'edits':[],'breaks':[0,1],'bullets':[]},{})[0],'- 第一，保留原意。\n- 第二，保留细节。')
+        self.assertEqual(apply_plan(raw,{'edits':[],'breaks':[0,1],'bullets':[]},{})[0],'1. 保留原意\n2. 保留细节')
     def test_previous_correction_is_not_a_replacement_rule(self):
         ctx=normalize_context({'personal_terms':['星河知识库'],'personal_aliases':[{'heard':'星禾知识库','term':'星河知识库'}]})
         raw='打开星禾知识库。保留“星禾知识库”和 `星禾知识库`。'

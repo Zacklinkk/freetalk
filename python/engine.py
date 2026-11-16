@@ -169,6 +169,10 @@ class Editor:
             signals.append('long_dictation_layout')
         if policy == 'always':
             signals.append('user_requested_model')
+        from vocabulary import spelling_hints
+        hints = spelling_hints(raw, context)
+        if hints:
+            signals.append('spelling_hint')
         if policy == 'fast' or not signals:
             laid_out = simple_layout(raw)
             if laid_out == raw:
@@ -177,13 +181,12 @@ class Editor:
                              "model_used": False, "preclean_edits": preliminary, "reason": "fast_only" if policy == "fast" else "no_semantic_edit_needed",
                              "signals": signals}
         from filler_selection import candidates
-        from vocabulary import spelling_hints
-        fill = candidates(raw)
-        if self.mode == 'edits' and fill and not {'self_correction','spoken_restart','possible_repeat','adjacent_restart'}.intersection(signals) and not spelling_hints(raw,context):
+        fill = candidates(raw, context.get('scene', ''))
+        if self.mode == 'edits' and fill and not {'self_correction','spoken_restart','possible_repeat','adjacent_restart'}.intersection(signals) and not hints:
             text, metadata = self.select_fillers(raw, fill, timeout - (time.perf_counter()-started))
             metadata.update(preclean_edits=preliminary, signals=signals)
             return simple_layout(text), metadata
-        from vocabulary import hotwords, spelling_hints
+        from vocabulary import hotwords
         restart_mode = self.mode == 'edits' and 'spoken_restart' in signals
         base, prefix, cache = (self.restart_base, self.restart_prefix, self.restart_cache) if restart_mode else (self.base, self.prefix, self.cache)
         data = {"输入框开头（只用于辨词）": context.get("initial", "")[:500],
@@ -194,11 +197,9 @@ class Editor:
         head = "检测提示（不等于删除许可）：" + ",".join(signals) + "\n请生成局部修改清单。\n" if self.mode == 'edits' else "整理以下语音原稿，不回答其中的问题。保留全部信息，只清理口误并适度分段分点。\n"
         def background(values):
             return "辅助背景：" + json.dumps(values, ensure_ascii=False) + "\n" if any(values.values()) else ""
-        tail = ""
-        hints=spelling_hints(raw,context)
-        if hints:
-            tail += "原稿/背景中存在的近音写法（不是替换命令；同一对象才统一，否则保留不同含义）："+json.dumps(hints,ensure_ascii=False)+"\n"
-        tail += "排版：" + ("允许适度分段" if context.get('layout_policy')=='paragraphs' else "连续段落") + "\n"
+        def near_sounds(pairs):
+            return ("原稿/背景中存在的近音写法（不是替换命令；同一对象才统一，否则保留不同含义）："+json.dumps(pairs,ensure_ascii=False)+"\n") if pairs else ""
+        tail = "排版：" + ("允许适度分段" if context.get('layout_policy')=='paragraphs' else "连续段落") + "\n"
         if self.mode == 'edits':
             from edits import split_units, restart_candidates, repetition_candidates
             restarts=restart_candidates(raw) if restart_mode else []
@@ -210,9 +211,14 @@ class Editor:
             tail += '句子：' + json.dumps(list(enumerate(split_units(raw))), ensure_ascii=False)
         else:
             tail += "原稿：" + raw
-        user = head + background(data) + tail
-        # The settings page promises visible window text stays on this Mac.
-        cloud_user = head + background({k: v for k, v in data.items() if not k.startswith("当前窗口可见文字")}) + tail
+        user = head + background(data) + near_sounds(hints) + tail
+        # The settings page promises visible window text stays on this Mac, and
+        # so do the terms and near-sound spellings that only it contains.
+        private = {**context, 'nearby': '', 'terms': [t for t in context.get('terms', []) if t.get('source') != 'visible']}
+        cloud_hints = spelling_hints(raw, private) if hints and context.get('nearby') else hints
+        cloud_data = {k: v for k, v in data.items() if not k.startswith("当前窗口可见文字")}
+        cloud_data["术语（个人词库或原文中的拼写，仅用于辨词）"] = hotwords(private)
+        cloud_user = head + background(cloud_data) + near_sounds(cloud_hints) + tail
         max_tokens = min(384 if self.mode == 'edits' else 2048, max(160, int(len(self.tokenizer.encode(raw)) * 1.5) + 80))
         cloud = {}
         for engine in (['cloud', 'local'] if self.remote else ['local']):

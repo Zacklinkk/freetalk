@@ -8,14 +8,30 @@ SMALL = {'十':10,'百':100,'千':1000}
 BIG = {'万':10000,'亿':100000000}
 CHARS = '零〇一二两三四五六七八九十百千万亿幺'
 TOKEN = re.compile(r'(?:百分之)?[负正]?[{}]+(?:点[零〇一二三四五六七八九]+)?(?:[多余来][万亿]?)?'.format(CHARS))
-COUNTERS = r'个|条|道|次|份|项|组|页|行|列|张|本|台|人|名|位|岁|年|月|日|号|天|周|小时|分钟|秒|点|元|块|角|分|米|公里|斤|公斤|克|吨|升|毫升|字|段|种|版|倍|成|轮|步|章|节|款|辆|支|根|只|套|批|度|赫兹|千赫兹|GB|GiB|MB|毫秒|厘米|毫米|%|％'
+COUNTERS = r'个|条|道|次|份|项|组|页|行|列|张|本|台|人|名|位|岁|年|月|日|号|天|周|小时|分钟|秒|点|元|块|角(?![形星洲函])|分|米|公里|斤|公斤|克|吨|升|毫升|字|段|种|版|倍|成|轮|步|章|节|款|辆|支|根|只|套|批|度|赫兹|千赫兹|GB|GiB|MB|毫秒|厘米|毫米|%|％'
 # Numeric-looking parts of words/names/weekdays are not quantities.
-WORDS = re.compile(r'星期[一二三四五六日天]|礼拜[一二三四五六日天]|周[一二三四五六日天]|一(?:下|直|起|样|般|些|切|旦|定|致|共|边|方面|会儿|点儿)|万一|千万(?:别|不要)|百姓|三思|四舍五入|五花八门|七嘴八舌|乱七八糟|独一无二|一心一意|一举两得|三心二意|九牛一毛|三十而立|十有八九|二话不说|三番五次|五颜六色|四面八方|一干二净')
+WORDS = re.compile(r'一点一点|一步一步|一个一个|一条一条|星期[一二三四五六日天]|礼拜[一二三四五六日天]|周[一二三四五六日天]|一(?:下|直|起|样|般|些|切|旦|定|致|共|边|方面|会儿|点儿)|万一|千万(?:别|不要)|百姓|三思|四舍五入|五花八门|七嘴八舌|乱七八糟|独一无二|一心一意|一举两得|三心二意|九牛一毛|三十而立|十有八九|二话不说|三番五次|五颜六色|四面八方|一干二净')
 LEXICAL = re.compile(r'统一|唯一|单一|同一|逐一|不一|一并|一律|一概|一贯|一部分|一系列|一体|一类|一线|一流|一番|一味|一度|一向|一时|一再|一起|十分(?=方便|重要|困难|简单|清楚|明确|容易|稳定|相似|必要|满意|感谢|高兴|复杂|好|大|小)|万分|百度|百科|万维|两者|二者|双方|三者|两全|三维|二维|一维')
 NUMBER_CUE = re.compile(r'(?:编号|号码|编码|密码|数字|输入|读作|版本|金额|预算|总计|共计|数量|人数|样本数)(?:为|是|有|约|：|:|\s)*$')
 EXACT_ONE_CUE = re.compile(r'(?:只有|仅有|仅|总共|一共|共|还剩|剩|恰好|正好|至少|最多|最少|不超过|只用|保留|[=＝:：])\s*$')
 VERSION_HEAD = re.compile(r'(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_.+-]{1,39}|[vV])[ \t]*$')
-VERSION_TAIL = re.compile(r'^(?:$|[\s，,。！？!?；;：:、/()（）]|的|和|与|或|有|没有|是|在|比|以及|到|对比|版本|模型|资源|可|能|支持|用于|用来|来|重新|再|先|跑|测|做|生成|处理|表现|速度|性能|价格)')
+VERSION_TAIL = re.compile(r'^(?:$|[\s，,。！？!?；;：:、/()（）]|的|和|与|或|有|没有|是|在|比|以及|到|对比|版本|模型|资源|可|能|支持|用于|用来|来|重新|再|先|跑|测|做|生成|处理|表现|速度|性能|价格|上|里|中|环境|及以上|以上|以下)')
+# A spoken version: v 二点三点一, Python 三点十二, 版本二点零. Each part
+# between 点 is a whole number, so 三点十二 is 3.12, not 3点十二.
+SPOKEN_VERSION = re.compile(r'(?P<head>(?<![A-Za-z0-9_])(?:[A-Za-z][A-Za-z0-9_+-]{1,39}|[vV])|版本号?(?:是|为|：|:)?)(?P<space>[ \t]*)'
+                            r'(?P<value>(?:\d+|[零〇一二两三四五六七八九十百]+)(?:点(?:\d+|[零〇一二两三四五六七八九十百]+))+)(?![零〇一二两三四五六七八九十百\d点])')
+# A value given to a setting: rank 设成十六，端口改成八零八零。
+SETTING_CUE = re.compile(r'(?:设成|设为|设置成|设置为|设到|改成|改为|调成|调为|调到|调整为|调整到|定为|定成|设定为|写成|填成|填为|配成|配置为|等于)\s*$')
+VALUE_END = re.compile(r'^(?:$|[\s，,。.!！?？；;、）)]|吧|了|就|的话|即可|就行|就好|左右|以上|以下)')
+# 把 Python 升到三点十三: a version after an upgrade verb, when the clause names
+# a product (a capitalized word or a v prefix) earlier.
+UPGRADE = re.compile(r'(?P<head>(?:升级|升|降级|降|回退|切换|切|更新)到)(?P<value>(?:\d+|[零〇一二两三四五六七八九十百]+)(?:点(?:\d+|[零〇一二两三四五六七八九十百]+))+)(?![零〇一二两三四五六七八九十百\d点])')
+PRODUCT = re.compile(r'(?<![A-Za-z0-9_])(?:[A-Za-z]*[A-Z][A-Za-z0-9_+-]*|[vV](?=[\d零〇一二三四五六七八九]))')
+# Three o'clock and fifteen minutes, said without 分: 三点十五 is 3点15, never 3.15
+# (a decimal is read digit by digit: 三点一五).
+CLOCK = re.compile(r'(?<![零〇一二两三四五六七八九十百千万\d点.])(?P<hour>[零〇一二两三四五六七八九十]{1,3})点(?P<minute>[一二三四五]?十[一二三四五六七八九]?)(?![零〇一二三四五六七八九十百千万\d点分秒钟])')
+# After 两点: a clock time (两点前, 两点半, 两点开会), not two points (两点建议).
+CLOCK_AFTER = re.compile(r'点(?:前|之前|以前|后|之后|以后|半|整|钟|多|左右|开始|开会|到|见|过|准时|出发|集合|下班|上班|吃饭|那会|的时候|[一二三四五]?十|[零〇一二三四五六七八九\d])')
 
 def integer(token):
     if not token: return None
@@ -80,8 +96,51 @@ def normalize(text, protected_terms=()):
     pattern = r'(?P<head>(?:型号|编号|编码)(?:是|为|：|:|\s)*)(?P<value>[A-Z]{1,12}(?:(?:横杠|连字符|杠)[。\s]*|[A-Z0-9零〇一二三四五六七八九幺-]){1,60})'
     text = re.sub(pattern, identifier, text)
     literal_ranges = [(m.start(),m.end()) for m in LITERALS.finditer(text)]
-    pattern = r'(?P<head>(?<![A-Za-z0-9_])[vV])(?P<value>[0-9零〇一二三四五六七八九]+(?:点[0-9零〇一二三四五六七八九]+)+)(?![A-Za-z])'
-    text = re.sub(pattern, identifier, text)
+    def spoken_version(match):
+        nonlocal extra
+        head = match['head']
+        if any(match.start()<b and match.end()>a for a,b in literal_ranges): return match[0]
+        if any(term and term in match[0] for term in protected_terms): return match[0]
+        # A product name needs a capital (Python, iOS) or the v prefix; lowercase
+        # words in mixed speech are too often ordinary English.
+        if head[0].isascii() and not (head in ('v', 'V') or any(c.isupper() for c in head)): return match[0]
+        if not VERSION_TAIL.match(text[match.end():]): return match[0]
+        parts = [integer(part) if not part.isdigit() else part for part in match['value'].split('点')]
+        if any(part is None for part in parts): return match[0]
+        extra += 1
+        spaced = head.isascii() and head not in ('v', 'V') and match['space']
+        # Keep the spacing symmetric: "Python 三点十二跑" → "Python 3.12 跑".
+        after = ' ' if spaced and re.match(r'[一-鿿]', text[match.end():match.end()+1]) else ''
+        return head + (match['space'] if spaced else '') + '.'.join(parts) + after
+    text = SPOKEN_VERSION.sub(spoken_version, text)
+    def upgraded(match):
+        nonlocal extra
+        clause = re.split(r'[，,。！？!?；;\n]', text[:match.start()])[-1]
+        if any(match.start()<b and match.end()>a for a,b in literal_ranges) or not (PRODUCT.search(clause) or '版本' in clause): return match[0]
+        parts = [integer(part) if not part.isdigit() else part for part in match['value'].split('点')]
+        if any(part is None for part in parts): return match[0]
+        extra += 1
+        return match['head'] + '.'.join(parts)
+    text = UPGRADE.sub(upgraded, text)
+    def clock(match):
+        nonlocal extra
+        if any(match.start()<b and match.end()>a for a,b in literal_ranges): return match[0]
+        if any(term and term in match[0] for term in protected_terms): return match[0]
+        hour, minute = integer(match['hour']), integer(match['minute'])
+        if hour is None or minute is None or int(hour) > 24 or not 10 <= int(minute) <= 59: return match[0]
+        extra += 1
+        return hour + '点' + minute
+    text = CLOCK.sub(clock, text)
+    # Two or more 点 make a version even without a name: 升级到二点三点一.
+    def dotted(match):
+        nonlocal extra
+        if any(match.start()<b and match.end()>a for a,b in literal_ranges): return match[0]
+        if any(term and term in match[0] for term in protected_terms): return match[0]
+        parts = [integer(part) if not part.isdigit() else part for part in match[0].split('点')]
+        if any(part is None for part in parts): return match[0]
+        extra += 1
+        return '.'.join(parts)
+    text = re.sub(r'(?<![零〇一二两三四五六七八九十百\d点])(?:\d+|[零〇一二两三四五六七八九十百]+)(?:点(?:\d+|[零〇一二两三四五六七八九十百]+)){2,}(?![零〇一二两三四五六七八九十百\d点])', dotted, text)
     protected=[(m.start(),m.end()) for pattern in (LITERALS,WORDS,LEXICAL) for m in pattern.finditer(text)]
     for term in protected_terms:
         if isinstance(term,str) and term:
@@ -101,7 +160,7 @@ def normalize(text, protected_terms=()):
         bare=word.removeprefix('百分之').lstrip('负正')
         is_digits=all(c in DIGITS for c in bare)
         standalone = not before.strip(' ：:，,。') and not after.strip(' ，,。.!！?？')
-        cue = bool(NUMBER_CUE.search(before))
+        cue = bool(NUMBER_CUE.search(before)) or bool(SETTING_CUE.search(before) and VALUE_END.match(after))
         quantity = bool(re.match(COUNTERS,after)) and not any(l <= b < r for l,r in protected)
         # Model/product identifiers use numeric versions, regardless of brand.
         # Lexical phrases (一直/一般/五花八门), quotations and personal names
@@ -109,6 +168,16 @@ def normalize(text, protected_terms=()):
         name = VERSION_HEAD.search(before)
         version = bool(name and not quantity and VERSION_TAIL.match(after) and (name[1] == 'v' or any(c.isupper() for c in name[1])))
         ordinal = before.endswith('第') and quantity
+        # 第一组 to 第十组 read as words in Chinese prose; 第12组 is the same as
+        # writing 12. Spoken 两 (两个人, 两次) is also a word, except on a clock.
+        if before.endswith('第') and len(bare) == 1:
+            continue
+        if bare == '两' and not (cue or version or standalone):
+            points = re.search(r'(?:这|那|几|哪|有|以下|如下|下面|上面|主要|以上|提|说|讲)$', before)
+            clock = after.startswith('点') and not points and (CLOCK_AFTER.match(after) or
+                re.search(r'上午|下午|中午|晚上|凌晨|早上|傍晚|夜里', re.split(r'[，,。！？!?；;\n]', before)[-1][-6:]))
+            if not clock:
+                continue
         if not (quantity or ordinal or standalone or cue or version or word.startswith('百分之')):
             continue
         if is_digits and len(bare)==2 and re.fullmatch(r'[一二两三四五六七八九]{2}',bare):
