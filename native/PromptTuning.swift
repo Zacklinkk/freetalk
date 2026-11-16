@@ -1,7 +1,8 @@
 import AppKit
 
-/// Settings card: send collected cases to the cloud model, replay old and new
-/// rules on this Mac, show both, and let the user adopt or discard.
+/// Settings card: send collected cases to the strong cloud model, replay old
+/// and new rules on this Mac with the user's cases and the eval set, and adopt
+/// the new rules when neither got worse. Also runs once a night when enabled.
 final class PromptTuningPanel: NSObject {
     unowned let app: AppDelegate
     let store: CleanupFeedbackStore
@@ -9,8 +10,8 @@ final class PromptTuningPanel: NSObject {
     private let result = NSTextField(wrappingLabelWithString: "")
     private let rules = NSTextField(wrappingLabelWithString: "")
     private var run: NSButton!, adopt: NSButton!, discard: NSButton!, reset: NSButton!, clear: NSButton!
-    private let model = NSTextField()
     private var proposal: [String] = []
+    private var nightlyTimer: Timer?
     /// The worker is replaying cases; dictation waits until it finishes.
     private(set) var busy = false
     /// Waiting for the Keychain before a run starts; dictation is not blocked.
@@ -20,32 +21,31 @@ final class PromptTuningPanel: NSObject {
     func makeCard() -> NSView {
         for field in [summary, result, rules] { field.font = .systemFont(ofSize: 12); field.textColor = .secondaryLabelColor }
         rules.textColor = .labelColor
-        run = app.button("用云端模型优化整理规则", #selector(start)); run.target = self
-        adopt = app.button("采用新规则", #selector(adoptRules)); adopt.target = self
+        run = app.button("用强模型优化整理规则", #selector(start)); run.target = self
+        adopt = app.button("仍然采用", #selector(adoptRules)); adopt.target = self
         discard = app.button("放弃", #selector(discardRules)); discard.target = self
         reset = app.button("恢复默认规则", #selector(resetRules)); reset.target = self
         clear = app.button("清除记录", #selector(clearCases)); clear.target = self
-        model.placeholderString = "可选 · 留空则用云端整理的模型；建议填同一服务里更强的模型"
-        model.stringValue = UserDefaults.standard.string(forKey: "promptTuningModel") ?? ""
-        model.setAccessibilityLabel("规则优化使用的模型")
         refresh()
-        return app.card("整理规则优化", "口述插入后你又改动的文字会记在本机。积累一些后，可以请云端模型总结成几条整理偏好；本机先用新旧规则重跑这些记录，结果给你看，你确认后才生效。", views: [
-            summary, VoiceAppearance.form([("优化用模型", model)]), app.row([run, clear]), result, rules, app.row([adopt, discard, reset]),
-            app.label("会发送到云端：这些记录的原稿、整理结果和你改后的文字，以及现有整理规则。使用「云端整理」里填的服务与密钥；不发送音频和窗口文字。", size: 11, color: .secondaryLabelColor)])
+        return app.card("整理规则优化", "口述插入后你又改动的文字会记在本机。积累一些后，可以请强模型总结成几条整理偏好；本机先用新旧规则重跑这些记录和内置测试集，都没有变差就自动采用，否则把结果给你看，由你决定。", views: [
+            summary, app.row([run, clear]), result, rules, app.row([adopt, discard, reset]),
+            app.label("会发送到云端：这些记录的原稿、整理结果和你改后的文字，以及现有整理规则。使用「语音输入 → 专业配置 → 云端模型」里的强模型；不发送音频和窗口文字。", size: 11, color: .secondaryLabelColor)])
     }
 
     func refresh() {
         // Called by the learner and the sidebar too; the buttons exist only once the card is built.
         guard run != nil, adopt != nil, discard != nil, reset != nil, clear != nil else { return }
         let count = store.load().count, active = CleanupPreferences.load(app.support)
-        summary.stringValue = "已记录 \(count) 条插入后又被你改动的口述" + (active.isEmpty ? "，当前使用默认规则。" : "，当前使用 \(active.count) 条整理偏好：\n" + active.map { "· " + $0 }.joined(separator: "\n"))
-        // Tuning needs the service and key, not cloud cleanup itself switched on.
-        var cloud = CloudEditorSettings.load(); cloud.enabled = true
-        let ready = cloud.configured
+        let night = UserDefaults.standard.string(forKey: "nightlyTuningReport").map { "\n夜间优化：\($0)" } ?? ""
+        summary.stringValue = "已记录 \(count) 条插入后又被你改动的口述" + (active.isEmpty ? "，当前使用默认规则。" : "，当前使用 \(active.count) 条整理偏好：\n" + active.map { "· " + $0 }.joined(separator: "\n")) + night
+        let cloud = CloudEditorSettings.load()
+        let ready = cloud.serviceReady && cloud.tuning
         run.isEnabled = !busy && !reading && count >= 3 && ready && app.worker.ready && app.phase == .idle && !app.meetings.busy && proposal.isEmpty
         if !busy && !reading && proposal.isEmpty {
             if count < 3 { result.stringValue = "至少需要 3 条记录。" }
-            else if !ready { result.stringValue = "需要先在「语音输入 → 专业配置 → 云端整理」里填好服务和密钥（不必开启云端整理）。" }
+            else if !cloud.serviceReady { result.stringValue = "需要先在「语音输入 → 专业配置 → 云端模型」里填好服务、模型和密钥。" }
+            else if !cloud.tuning { result.stringValue = "「云端模型」里没有勾选“整理规则优化”。" }
+            else if result.stringValue.hasPrefix("至少") || result.stringValue.hasPrefix("需要先") || result.stringValue.hasPrefix("「云端模型」") { result.stringValue = "" }
         }
         adopt.isHidden = proposal.isEmpty; discard.isHidden = proposal.isEmpty; rules.isHidden = proposal.isEmpty
         reset.isHidden = active.isEmpty || !proposal.isEmpty
@@ -53,38 +53,42 @@ final class PromptTuningPanel: NSObject {
     }
 
     @objc private func start() {
-        var cloud = CloudEditorSettings.load(); cloud.enabled = true
-        guard cloud.configured else { result.stringValue = "云端服务配置不完整。"; return }
-        // Cloud cleanup may be off, so nothing read the key at launch; wait for it here.
+        let cloud = CloudEditorSettings.load()
+        guard cloud.serviceReady, cloud.tuning else { result.stringValue = "云端模型配置不完整，或没有勾选“整理规则优化”。"; return }
+        // Nothing may have read the key at launch; wait for it here.
         // Dictation stays available while macOS shows the Keychain prompt.
         reading = true; refresh(); result.stringValue = "正在读取钥匙串中的密钥…（如果 macOS 询问，请选择“始终允许”）"
         CloudCredentialStore.prefetch(cloud.baseURL) { [weak self] credentials in
             guard let self = self else { return }
             self.reading = false
             guard let credentials = credentials else {
-                self.result.stringValue = "无法从钥匙串读取 API Key：请在「云端整理」里重新保存，或在系统询问时选择“始终允许”。"
+                self.result.stringValue = "无法从钥匙串读取 API Key：请在「云端模型」里重新保存，或在系统询问时选择“始终允许”。"
                 self.refresh(); return
             }
-            guard self.app.worker.ready, self.app.phase == .idle, !self.app.meetings.busy else {
-                self.result.stringValue = "正在口述或处理会议，空闲后再试。"; self.refresh(); return
-            }
-            self.tune(cloud.payload(with: credentials))
+            guard self.idle else { self.result.stringValue = "正在口述或处理会议，空闲后再试。"; self.refresh(); return }
+            self.tune(cloud.payload(with: credentials, strong: true), model: cloud.strongName, automatic: false)
         }
     }
 
-    private func tune(_ base: [String: Any]) {
-        var payload = base
-        let strong = model.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        UserDefaults.standard.set(strong, forKey: "promptTuningModel")
-        if !strong.isEmpty { payload["model"] = strong }
+    private var idle: Bool {
+        app.worker.ready && app.phase == .idle && !app.meetings.busy && !app.inserter.busy && !app.modelSetup.busy
+            && !app.appUpdater.installing && !app.promptEditor.checking && !busy && !reading && proposal.isEmpty
+    }
+
+    private func tune(_ payload: [String: Any], model: String, automatic: Bool) {
         let cases = store.load().map { ["raw": $0.raw, "inserted": $0.inserted, "final": $0.final] }
         // Recent dictations the user left alone: the new rules must not disturb them.
         let edited = Set(store.load().map(\.raw))
         let accepted = app.historyStore.entries.filter { $0.modelUsed && !edited.contains($0.raw) && $0.insertionStatus.hasPrefix("已插入") }.prefix(10).map(\.raw)
-        busy = true; run.isEnabled = false; result.stringValue = "正在请云端模型总结…（随后本机重跑，约需几分钟，期间暂停口述）"
+        busy = true; run.isEnabled = false; result.stringValue = "正在请强模型总结…（随后本机重跑记录和测试集，约需几分钟，期间暂停口述）"
         app.worker.onTuneProgress = { [weak self] event in
-            guard let self = self, event["stage"] as? String == "replay", let done = event["completed"] as? Int, let total = event["total"] as? Int else { return }
-            self.result.stringValue = "正在本机用新旧规则重跑记录 \(done)/\(total)…"
+            guard let self = self, let done = event["completed"] as? Int, let total = event["total"] as? Int else { return }
+            switch event["stage"] as? String {
+            case "replay": self.result.stringValue = "正在本机用新旧规则重跑记录 \(done)/\(total)…"
+            case "eval-before": self.result.stringValue = "正在用现有规则跑测试集 \(done)/\(total)…"
+            case "eval-after": self.result.stringValue = "正在用新规则跑测试集 \(done)/\(total)…"
+            default: break
+            }
         }
         let terms = (try? app.vocabularyStore.load()) ?? []
         let policy = ["auto", "always", "fast"][max(0, min(2, app.cleanupPicker.indexOfSelectedItem))]
@@ -93,36 +97,93 @@ final class PromptTuningPanel: NSObject {
             self.app.worker.onTuneProgress = nil; self.busy = false
             switch response {
             case .failure(let error):
-                self.result.stringValue = "未完成：\(CloudEditorSettings.describe(fallback: error.localizedDescription))"
+                let reason = CloudEditorSettings.describe(fallback: error.localizedDescription)
+                self.result.stringValue = "未完成：\(reason)"
+                if automatic { self.report("未完成：\(reason)") }
             case .success(let value):
                 let proposed = value["rules"] as? [String] ?? []
-                let scores = value["scores"] as? [String: Int] ?? [:]
-                if proposed.isEmpty { self.result.stringValue = "云端模型没有找到可靠的共性问题，规则保持不变。" }
-                else {
+                let reason = value["reason"] as? String ?? ""
+                if proposed.isEmpty {
+                    self.result.stringValue = "强模型没有找到可靠的共性问题，规则保持不变。"
+                    if automatic { self.report("没有找到可靠的共性问题，规则不变") }
+                } else if value["adopt"] as? Bool == true {
+                    self.save(proposed, model: model, message: "已自动采用：\(reason)。下次口述生效。")
+                    if automatic { self.report("已自动采用 \(proposed.count) 条整理偏好（\(reason)）") }
+                } else if automatic {
+                    self.report("未采用：\(reason)")
+                } else {
                     self.proposal = proposed
-                    let examples = value["examples"] as? [[String: String]] ?? []
-                    let changed = examples.filter { $0["result"] == "accepted_changed" }.prefix(3)
-                    self.rules.stringValue = "建议的整理偏好：\n" + proposed.map { "· " + $0 }.joined(separator: "\n") +
-                        (changed.isEmpty ? "" : "\n\n会变化的口述（请确认没有变差）：\n" + changed.map { "· 原来：\($0["before"] ?? "")\n  新规则：\($0["after"] ?? "")" }.joined(separator: "\n"))
-                    self.result.stringValue = "本机重跑 \(cases.count) 条记录：\(scores["improved"] ?? 0) 条更接近你改后的文字，\(scores["worse"] ?? 0) 条更远，\(scores["same"] ?? 0) 条不变。" +
-                        ((scores["accepted_total"] ?? 0) > 0 ? "\n未发现改动的 \(scores["accepted_total"] ?? 0) 条近期口述中，有 \(scores["accepted_changed"] ?? 0) 条结果会变化。" : "")
+                    self.rules.stringValue = "建议的整理偏好：\n" + proposed.map { "· " + $0 }.joined(separator: "\n") + Self.details(value)
+                    self.result.stringValue = "未自动采用：\(reason)。可以查看下面的变化后决定。"
                 }
             }
             self.refresh()
         }
     }
 
-    @objc private func adoptRules() {
+    /// What changed, for a proposal that was not adopted automatically.
+    private static func details(_ value: [String: Any]) -> String {
+        let scores = value["scores"] as? [String: Int] ?? [:]
+        var lines = ["本机重跑：\(scores["improved"] ?? 0) 条更接近你改后的文字，\(scores["worse"] ?? 0) 条更远，\(scores["same"] ?? 0) 条不变。"]
+        if let eval = value["eval"] as? [String: Any] {
+            let lost = eval["regressions"] as? [String] ?? []
+            lines.append("测试集：\(eval["before"] as? Int ?? 0) → \(eval["after"] as? Int ?? 0) / \(eval["total"] as? Int ?? 0) 条通过" + (lost.isEmpty ? "。" : "；变差：\(lost.joined(separator: "、"))。"))
+        }
+        let examples = (value["examples"] as? [[String: String]] ?? []).filter { $0["result"] != "improved" }.prefix(3)
+        lines += examples.map { "· 原来：\($0["before"] ?? "")\n  新规则：\($0["after"] ?? "")" }
+        return "\n\n" + lines.joined(separator: "\n")
+    }
+
+    private func save(_ proposed: [String], model: String, message: String) {
         do {
-            let used = model.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            try CleanupPreferences.save(proposal, model: used.isEmpty ? CloudEditorSettings.load().model : used, support: app.support)
-            app.worker.request("set_preferences", ["rules": proposal])
-            result.stringValue = "已采用，下次口述生效。"; proposal = []
+            try CleanupPreferences.save(proposed, model: model, support: app.support)
+            app.worker.request("set_preferences", ["rules": proposed])
+            result.stringValue = message
         } catch { result.stringValue = "保存失败：\(error.localizedDescription)" }
-        refresh()
+    }
+
+    private func report(_ text: String) {
+        let formatter = DateFormatter(); formatter.dateFormat = "M月d日 HH:mm"
+        UserDefaults.standard.set("\(formatter.string(from: Date()))，\(text)", forKey: "nightlyTuningReport")
+    }
+
+    // MARK: Nightly
+
+    /// Check every ten minutes whether tonight's run is due.
+    func scheduleNightly() {
+        nightlyTimer?.invalidate()
+        nightlyTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in self?.runNightlyIfDue() }
+    }
+
+    /// Once a night, between 00:30 and 06:00, when there are new cases and the
+    /// Mac has been idle for 15 minutes. A Keychain prompt at night would wait
+    /// for nobody, so a key that was never read this launch skips the night.
+    func runNightlyIfDue(now: Date = Date()) {
+        let cloud = CloudEditorSettings.load()
+        guard cloud.nightly, cloud.serviceReady, idle else { return }
+        let calendar = Calendar.current
+        let minutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+        guard (30..<360).contains(minutes) else { return }
+        let defaults = UserDefaults.standard
+        if let last = defaults.object(forKey: "nightlyTuningLastRun") as? Date, calendar.isDate(last, inSameDayAs: now) { return }
+        if let recent = app.historyStore.entries.first?.createdAt, now.timeIntervalSince(recent) < 15 * 60 { return }
+        let cases = store.load()
+        guard cases.count >= 3, let newest = cases.map(\.createdAt).max() else { return }
+        if let stamp = defaults.object(forKey: "nightlyTuningCasesStamp") as? Date, newest <= stamp { return }
+        defaults.set(now, forKey: "nightlyTuningLastRun")
+        guard let credentials = CloudCredentialStore.cached(cloud.baseURL) else {
+            report("钥匙串尚未授权，今晚跳过；白天测试一次云端连接即可"); refresh(); return
+        }
+        defaults.set(newest, forKey: "nightlyTuningCasesStamp")
+        tune(cloud.payload(with: credentials, strong: true), model: cloud.strongName, automatic: true)
+    }
+
+    @objc private func adoptRules() {
+        save(proposal, model: CloudEditorSettings.load().strongName, message: "已采用，下次口述生效。")
+        proposal = []; rules.stringValue = ""; refresh()
     }
     @objc private func clearCases() { store.clear(); result.stringValue = "已清除本机记录。"; refresh() }
-    @objc private func discardRules() { proposal = []; result.stringValue = "已放弃，规则保持不变。"; refresh() }
+    @objc private func discardRules() { proposal = []; rules.stringValue = ""; result.stringValue = "已放弃，规则保持不变。"; refresh() }
     @objc private func resetRules() {
         try? FileManager.default.removeItem(at: CleanupPreferences.file(app.support))
         app.worker.request("set_preferences", ["rules": [String]()])

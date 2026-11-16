@@ -96,10 +96,14 @@ final class MeetingController: NSObject {
         item["audio_retained"] = FileManager.default.fileExists(atPath:directory(id).appendingPathComponent("audio.wav").path)
         try? write(item,to:url)
     }
-    var cloudConfigured: Bool {
+    /// The meeting's own service from before 0.7, used when the strong model is not chosen for meetings.
+    var legacyCloudConfigured: Bool {
         let enabled = settings["cloud_enabled"] as? Bool ?? (settings["summary_mode"] as? String == "cloud")
         return enabled && !(settings["base_url"] as? String ?? "").isEmpty && !(settings["model"] as? String ?? "").isEmpty
     }
+    /// Meeting writing uses the strong model when 云端模型 → 会议 is ticked.
+    var strongCloud: Bool { let cloud = CloudEditorSettings.load(); return cloud.meetings && cloud.serviceReady }
+    var cloudConfigured: Bool { strongCloud || legacyCloudConfigured }
     func available() throws {
         guard enabled else { throw VoiceError.message("请先启用会议功能") }
         guard !busy, app.phase == .idle, !app.inserter.busy, !app.modelSetup.busy, !app.appUpdater.installing else { throw VoiceError.message("请先结束当前录音、处理或下载") }
@@ -174,7 +178,20 @@ final class MeetingController: NSObject {
         var payload: [String:Any] = ["support":app.support.path,"meeting_id":id]
         payload["hotwords"] = (try? app.vocabularyStore.load()) ?? []
         if let audio = audio { payload["audio_path"] = audio.path }
-        if cloudConfigured { payload["api_key"] = MeetingKeychain.read(endpoint:settings["base_url"] as? String ?? "") ?? "" }
+        if strongCloud {
+            let cloud = CloudEditorSettings.load()
+            CloudCredentialStore.prefetch(cloud.baseURL) { [weak self] credentials in
+                guard let self = self, self.request == token else { return }
+                if let credentials = credentials { payload["cloud"] = cloud.payload(with: credentials, strong: true) }
+                else { self.message = "钥匙串未授权，本次只在本机生成基础资料…"; self.onChange?() }
+                self.send(payload, id: id, token: token)
+            }
+            return
+        }
+        if legacyCloudConfigured { payload["api_key"] = MeetingKeychain.read(endpoint:settings["base_url"] as? String ?? "") ?? "" }
+        send(payload, id: id, token: token)
+    }
+    private func send(_ payload: [String: Any], id: String, token: UUID) {
         app.worker.request("meeting",payload) { [weak self] result in
             guard let self = self, self.request == token else { return }; self.processing = false; self.fraction = nil
             switch result {
