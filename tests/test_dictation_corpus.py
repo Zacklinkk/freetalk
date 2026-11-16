@@ -79,6 +79,16 @@ class DoubledCharacterTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(preclean(raw)[0], expected)
 
+    def test_a_stutter_after_a_reduplicated_word_is_not_aabb(self):
+        # 0.6.0 read any XXYY as AABB and kept these stutters.
+        for raw, expected in [('我们先看看能能不能复现。', '我们先看看能不能复现。'), ('谢谢你你帮我看一下。', '谢谢你帮我看一下。'),
+                              ('你看看他他怎么说。', '你看看他怎么说。'), ('试试看看我我能不能登上去。', '试试看看我能不能登上去。')]:
+            with self.subTest(raw=raw):
+                self.assertEqual(preclean(raw)[0], expected)
+        for raw in ['说得清清楚楚。', '电梯上上下下。', '平平安安到家。', '断断续续说了很久。']:
+            with self.subTest(raw=raw):
+                self.assertEqual(preclean(raw)[0], raw)
+
 
 class RepairBoundaryTests(unittest.TestCase):
     """Spoken self-corrections keep the reason and drop only the old value."""

@@ -63,13 +63,23 @@ BOUNDARY_WORDS = frozenset('''
 成功 前提 必需 所需 认可 许可 不可 宁可 体操
 '''.split())
 
+# AB words whose AABB form is common in speech (干干净净, 上上下下). Any other
+# XXYY is not AABB: in 看看能能不能 or 谢谢你你 the second pair is a stutter.
+AABB_BASES = frozenset('''
+干净 清楚 明白 上下 大小 多少 高低 前后 里外 左右 来往 来回 进出 日夜 时刻 分秒 点滴 许多 千万
+高兴 开心 快乐 认真 仔细 详细 舒服 漂亮 简单 平安 安静 整齐 老实 规矩 踏实 实在 扎实 结实
+随便 马虎 轻松 痛快 干脆 热闹 冷清 普通 平常 平淡 大方 客气 和气 明确 利索 稳当 原本 完整
+断续 反复 零星 零碎 零散 匆忙 急忙 吞吐 说笑 打闹 蹦跳 摇晃 弯曲 坑洼 磕绊 是非 真假 虚实
+子孙 世代 祖辈 家户 年岁 方面 吃喝 写画 走停 战兢 兢业 堂正 熙攘 浩荡 轰烈 风火 密麻 林总
+'''.split())
+
 
 def word_boundary(raw, start):
     """Whether the doubled character at `start` is a word, not a stutter.
 
     Either it ends the previous word (一下|下周), or the doubling is itself a
     pattern: 一步步/一层层, 上上周/下下个月, 整整等了 (but 整整理 is 整理), and
-    the first or second half of AABB (干干净净, 清清楚楚, 上上下下).
+    either half of a known AABB word (干干净净, 清清楚楚, 上上下下).
     """
     char, previous = raw[start], raw[start - 1:start] if start else ''
     after = raw[start + 2:start + 4]
@@ -81,7 +91,9 @@ def word_boundary(raw, start):
         return True
     if char == '整' and after[:1] and after[0] not in '理体合改顿洁齐数形容装修治编个':
         return True
-    return (len(after) == 2 and after[0] == after[1] != char) or (start >= 2 and raw[start - 2] == raw[start - 1] != char)
+    first_half = len(after) == 2 and after[0] == after[1] and char + after[0] in AABB_BASES
+    second_half = start >= 2 and raw[start - 2] == raw[start - 1] and raw[start - 1] + char in AABB_BASES
+    return first_half or second_half
 
 def allowed(old, new, context):
     a, b = core(old), core(new)
