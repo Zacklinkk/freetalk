@@ -1,18 +1,30 @@
 import AppKit
 import Security
 
-/// Optional cloud model for dictation cleanup. Settings live in UserDefaults;
-/// the API key and any gateway headers live only in the Keychain.
+/// Optional cloud models: one service (protocol, address, key, headers), a fast
+/// model for dictation cleanup and translation, a strong model for rule tuning
+/// and meeting writing, and a switch per feature. Settings live in
+/// UserDefaults; the API key and any gateway headers live only in the Keychain.
 struct CloudEditorSettings {
     static let service = "io.github.zacklinkk.freetalk.cleanup"
     static let protocols = [("openai", "OpenAI 兼容（/chat/completions）"), ("anthropic", "Anthropic 兼容（/v1/messages）")]
     static let timeouts: [Double] = [5, 8, 12, 20]
+    /// Rule tuning and meeting writing run in the background; they may take minutes.
+    static let strongTimeout: Double = 240
 
+    /// Dictation cleanup uses the fast model (the original switch, kept for upgrades).
     var enabled = false
     var protocolName = "openai"
     var baseURL = ""
+    /// The fast model.
     var model = ""
+    /// Empty means the fast model does the strong model's work too.
+    var strongModel = ""
     var timeout: Double = 8
+    var translation = false
+    var meetings = false
+    var tuning = true
+    var nightly = false
 
     static func load() -> Self {
         let d = UserDefaults.standard
@@ -21,8 +33,14 @@ struct CloudEditorSettings {
         s.protocolName = protocols.map(\.0).contains(d.string(forKey: "cloudCleanupProtocol") ?? "") ? d.string(forKey: "cloudCleanupProtocol")! : "openai"
         s.baseURL = d.string(forKey: "cloudCleanupBaseURL") ?? ""
         s.model = d.string(forKey: "cloudCleanupModel") ?? ""
+        // Before 0.7 the strong model was typed on the tuning card.
+        s.strongModel = d.string(forKey: "cloudStrongModel") ?? d.string(forKey: "promptTuningModel") ?? ""
         let saved = d.double(forKey: "cloudCleanupTimeout")
         s.timeout = timeouts.contains(saved) ? saved : 8
+        s.translation = d.bool(forKey: "cloudTranslationEnabled")
+        s.meetings = d.bool(forKey: "cloudMeetingsEnabled")
+        s.tuning = d.object(forKey: "cloudTuningEnabled") as? Bool ?? true
+        s.nightly = d.bool(forKey: "cloudNightlyTuning")
         return s
     }
 
@@ -30,7 +48,16 @@ struct CloudEditorSettings {
         let d = UserDefaults.standard
         d.set(enabled, forKey: "cloudCleanupEnabled"); d.set(protocolName, forKey: "cloudCleanupProtocol")
         d.set(baseURL, forKey: "cloudCleanupBaseURL"); d.set(model, forKey: "cloudCleanupModel"); d.set(timeout, forKey: "cloudCleanupTimeout")
+        d.set(strongModel, forKey: "cloudStrongModel"); d.set(translation, forKey: "cloudTranslationEnabled")
+        d.set(meetings, forKey: "cloudMeetingsEnabled"); d.set(tuning, forKey: "cloudTuningEnabled"); d.set(nightly, forKey: "cloudNightlyTuning")
     }
+
+    /// The model that rule tuning and meeting writing use.
+    var strongName: String { strongModel.isEmpty ? model : strongModel }
+    /// Address, a model name and a stored key: enough to try either model.
+    var serviceReady: Bool { !baseURL.isEmpty && !model.isEmpty && Self.hasSecret(baseURL) }
+    /// Any feature that sends text to the service is switched on.
+    var anyFeature: Bool { enabled || translation || meetings || tuning || nightly }
 
     /// The same endpoint rules as the worker, checked before anything is saved.
     static func validated(baseURL raw: String) throws -> String {
@@ -63,8 +90,9 @@ struct CloudEditorSettings {
         return payload(with: credentials)
     }
 
-    func payload(with credentials: CloudCredentials) -> [String: Any] {
-        var value: [String: Any] = ["protocol": protocolName, "base_url": baseURL, "model": model, "api_key": credentials.key, "timeout_seconds": timeout]
+    func payload(with credentials: CloudCredentials, strong: Bool = false) -> [String: Any] {
+        var value: [String: Any] = ["protocol": protocolName, "base_url": baseURL, "model": strong ? strongName : model,
+                                    "api_key": credentials.key, "timeout_seconds": strong ? Self.strongTimeout : timeout]
         if !credentials.headers.isEmpty { value["headers"] = credentials.headers }
         return value
     }

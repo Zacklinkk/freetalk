@@ -122,7 +122,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Read cloud credentials once at launch, in the background: after an
         // update macOS asks here, not when the next recording starts.
         let cloudSettings = CloudEditorSettings.load()
-        if cloudSettings.configured { CloudCredentialStore.prefetch(cloudSettings.baseURL) }
+        if cloudSettings.serviceReady && cloudSettings.anyFeature { CloudCredentialStore.prefetch(cloudSettings.baseURL) }
+        promptTuning.scheduleNightly()
         appUpdater.canInstall = { [weak self] in
             guard let self = self else { return false }
             return self.phase == .idle && !self.inserter.busy && !self.modelSetup.busy && !self.meetings.busy
@@ -581,8 +582,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !meetings.busy else { showMeetings(); return }
         if phase == .recording { stopRecording(); return }
         if phase == .preparing { cancelRecording(reload:false); return }
-        guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !appUpdater.installing, !promptTuning.busy else {
+        guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !appUpdater.installing, !promptTuning.busy, !promptEditor.checking else {
             if promptTuning.busy { setStatus("整理规则优化进行中，完成后再口述") }
+            if promptEditor.checking { setStatus("正在用测试集检查提示词，完成后再口述") }
             return
         }
         tutorialSession = onboarding.wantsTrial
@@ -750,6 +752,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         }
+    }
+    /// The cloud card changed a setting that other pages show.
+    func cloudSettingsChanged() {
+        promptTuning.refresh(); meetingView?.refreshState()
     }
     func cancelRecording(reload: Bool = true) {
         // Once the paste key has been delivered, cancellation cannot undo it.
