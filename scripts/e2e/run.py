@@ -6,7 +6,9 @@ checks: translate rich learn ocr meeting nightly (default: all, in this order)
 The checks bring TextEdit to the front and press freetalk's shortcuts, so
 nobody should use the Mac meanwhile. --wait-idle starts only after the
 keyboard and mouse have been idle that long (and waits again before each
-check); a check that loses the front window fails and its recording is cancelled.
+check); a check that loses the front window fails and its recording is
+cancelled. Nothing is pressed while the screen is locked; checks left when it
+locks are skipped. The run never keeps the Mac awake or unlocked.
 
 Needs Accessibility, Input Monitoring, Microphone and Screen Recording for
 freetalk, TextEdit, and the BlackHole 2ch virtual audio device: the test's
@@ -74,9 +76,18 @@ def idle_seconds():
     return 0
 
 
+def locked():
+    """The screen is locked: keys would go to the password field, so nothing is pressed."""
+    out = sh('ioreg', '-n', 'Root', '-d1', '-a', check=False).stdout
+    try:
+        return bool(plistlib.loads(out.encode()).get('IOConsoleLocked'))
+    except Exception:
+        return True
+
+
 def wait_idle(seconds, limit=8 * 3600):
     if seconds:
-        wait(f'{seconds} s without keyboard or mouse use', lambda: idle_seconds() >= seconds, limit, every=10)
+        wait(f'{seconds} s without keyboard or mouse use, screen unlocked', lambda: idle_seconds() >= seconds and not locked(), limit, every=10)
 
 
 def running():
@@ -193,9 +204,11 @@ def launch():
     wait('the local models to load', lambda: (ask('status') or {}).get('worker_ready'), 300, every=2)
 
 
-def front():
+def front(tries=3):
     """TextEdit in front with a text view focused; False when it would not stay there."""
-    for _ in range(3):
+    if locked():
+        return False
+    for _ in range(tries):
         sh('osascript', '-e', 'tell application "TextEdit" to activate', check=False)
         time.sleep(0.6)
         if (ask('read') or {}).get('role') == 'AXTextArea':
@@ -209,6 +222,10 @@ def document(name):
     path.write_text(EMPTY_RTF)
     sh('open', '-a', 'TextEdit', path)
     wait('TextEdit to show the document', front, 30)
+    # A TextEdit that was just launched may still restore windows or show its
+    # open panel; the document must still have the focus a moment later.
+    time.sleep(2)
+    wait('TextEdit to settle on the document', lambda: front(tries=1), 30)
     return path
 
 
@@ -394,6 +411,9 @@ def main():
         results['status'] = send('status')
         print('status', json.dumps(results['status'], ensure_ascii=False), flush=True)
         for name in checks:
+            if locked():
+                results[name] = {'ok': False, 'skipped': 'the screen locked during the run'}
+                continue
             try:
                 wait_idle(min(idle, 20), limit=3600)
                 results[name] = globals()['check_' + name]()

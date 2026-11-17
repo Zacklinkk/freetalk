@@ -84,6 +84,8 @@ final class E2EHooks: NSObject {
     /// only while a test app is in front, so a dictation never starts elsewhere.
     private func post(_ which: String) -> Bool {
         guard let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, Self.testApps.contains(front) else { return false }
+        // A locked screen would take the keys as password input.
+        if let session = CGSessionCopyCurrentDictionary() as? [String: Any], session["CGSSessionScreenIsLocked"] as? Bool == true { return false }
         let binding: HotkeyBinding? = which == "translation" ? app.hotkey.translationBinding : which == "meeting" ? app.hotkey.meetingBinding : app.hotkey.binding
         guard let binding = binding, let source = CGEventSource(stateID: .hidSystemState) else { return false }
         func flags(_ modifiers: [HotkeyModifier]) -> CGEventFlags {
