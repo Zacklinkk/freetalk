@@ -21,11 +21,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var vocabularyStore = VocabularyStore(directory: support)
     lazy var vocabularyWindow = VocabularyWindow(store: vocabularyStore)
     lazy var correctionStore = CorrectionStore(directory: support, vocabulary: vocabularyStore)
-    lazy var correctionsWindow = CorrectionsWindow(store: correctionStore)
+    lazy var correctionsWindow: CorrectionsWindow = {
+        let window = CorrectionsWindow(store: correctionStore)
+        // Habits live in the worker's store; it is the only writer of that file.
+        window.listStyles = { [weak self] done in
+            self?.worker.request("style_list") { response in
+                if case .success(let result) = response { done(result["lessons"] as? [[String: Any]] ?? []) } else { done(nil) }
+            }
+        }
+        window.removeStyle = { [weak self] id, done in
+            self?.worker.request("style_remove", ["lesson": id]) { response in if case .success = response { done(true) } else { done(false) } }
+        }
+        return window
+    }()
     let correctionLearner = CorrectionLearner()
     let hud = RecordingHUD()
     let learningHUD = RecordingHUD()
     var undoableLearning: [LearnedCorrection] = []
+    /// Cleanup habits the undo prompt can take back, and the learning session that taught them.
+    var undoableStyle: [String] = [], undoableStyleSession: String?
     var cleanupPicker: NSPopUpButton!
     var layoutPicker: NSPopUpButton!
     var recordingLimitView: RecordingLimitView?
@@ -162,10 +176,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         correctionLearner.onLearn = { [weak self] change, anchor in
             guard let self=self else { return }
             self.undoableLearning.append(change); self.hud.hide()
-            let count=self.undoableLearning.count
             let source = change.alias.stage == .asr ? "识别" : "整理"
             let repeated = change.reinforced ? " · 第 \(change.alias.count) 次" : ""
-            self.learningHUD.showLearning(title:count == 1 ? "已学会 \(change.alias.term)" : "已学会 \(count) 处改字",detail:"\(source)：\(change.alias.heard) → \(change.alias.term)\(repeated) · 下次生效",anchor:anchor)
+            self.learningHUD.showLearning(title:self.learnedTitle("已学会 \(change.alias.term)"),detail:"\(source)：\(change.alias.heard) → \(change.alias.term)\(repeated) · 下次生效",anchor:anchor)
             self.learningStatus?.stringValue = "最近一次：已学会「\(change.alias.heard) → \(change.alias.term)」（\(source)阶段）"
             self.annotateHistory(self.learningEntryID) { $0.learned = ($0.learned ?? []) + ["已学会 \(change.alias.heard) → \(change.alias.term)（\(source)）"] }
         }
@@ -187,13 +200,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             if recorded { self.promptTuning.refresh() }
         }
+        correctionLearner.onEdit = { [weak self] session, raw, inserted, current, target in
+            guard let self = self else { return }
+            let payload: [String: Any] = ["session": session, "raw": raw, "inserted": inserted, "current": current, "scope": target.category.rawValue]
+            self.worker.request("learn_style", payload) { [weak self] response in
+                guard let self = self, case .success(let result) = response, let lessons = result["lessons"] as? [[String: Any]], !lessons.isEmpty else { return }
+                self.learnedStyle(lessons, session: session, anchor: target.anchor)
+            }
+        }
         correctionLearner.onError = { [weak self] error in self?.setStatus("词库未更新：\(error)") }
         learningHUD.onUndo = { [weak self] in
             guard let self=self else { return }
+            if let session = self.undoableStyleSession { self.worker.request("undo_style", ["session": session]) }
             do { for change in self.undoableLearning.reversed() { try self.correctionStore.undo(change) }; self.setStatus("已撤销刚学到的纠正") }
             catch { self.setStatus("撤销未完成：\(error.localizedDescription)") }
         }
-        learningHUD.onDismiss = { [weak self] in self?.undoableLearning.removeAll() }
+        learningHUD.onDismiss = { [weak self] in self?.undoableLearning.removeAll(); self?.undoableStyle.removeAll(); self?.undoableStyleSession = nil }
         worker.onStage = { [weak self] stage in
             guard let self = self, self.phase == .processing else { return }
             self.processingStage = stage == "edit" ? "小模型正在整理…" : "正在完成语音转写…"
@@ -856,6 +878,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         historyStore.update(id, change)
         recentHistoryView?.refresh()
         if historyWindow.window.isVisible { historyWindow.refresh() }
+    }
+    /// The undo prompt's title: one lesson by name, several by count.
+    func learnedTitle(_ single: String) -> String {
+        let words = undoableLearning.count, habits = undoableStyle.count
+        if words + habits == 1 { return single }
+        if habits == 0 { return "已学会 \(words) 处改字" }
+        return words == 0 ? "已学会 \(habits) 个整理习惯" : "已学会 \(words) 处改字和 \(habits) 个习惯"
+    }
+    /// Habits counted from the user's edit. One that now applies gets the undo
+    /// prompt; one seen for the first time waits for a second observation.
+    func learnedStyle(_ lessons: [[String: Any]], session: String, anchor: CGRect?) {
+        // A reply that arrives after the next learning session began belongs to no entry on screen.
+        guard correctionLearner.sessionID == session else { return }
+        let active = lessons.filter { $0["active"] as? Bool == true }.compactMap { $0["text"] as? String }
+        let waiting = lessons.filter { $0["active"] as? Bool != true }.compactMap { $0["text"] as? String }
+        annotateHistory(learningEntryID) { $0.learned = ($0.learned ?? []) + active.map { "已学会整理习惯：\($0)" } + waiting.map { "记下整理习惯：\($0)（再出现一次后生效）" } }
+        if let text = active.last { learningStatus?.stringValue = "最近一次：已学会整理习惯「\(text)」" }
+        else if let text = waiting.last { learningStatus?.stringValue = "最近一次：记下了「\(text)」，再出现一次后生效" }
+        // Recording again keeps the prompt away.
+        guard let text = active.last, phase == .idle else { return }
+        undoableStyle += active; undoableStyleSession = session; hud.hide()
+        learningHUD.showLearning(title: learnedTitle("已学会整理习惯"), detail: "\(text) · 下次生效", anchor: anchor)
     }
     @objc func showVocabulary() { vocabularyWindow.show() }
     @objc func showCorrections() { correctionsWindow.show() }

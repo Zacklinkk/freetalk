@@ -11,6 +11,9 @@ def normalize_context(data):
     selected = str(data.get('selected', ''))[:2000]
     app = str(data.get('app', ''))[:100]
     scene = str(data.get('scene', ''))[:40]
+    # The kind of app (chat, email, code_editor, …) from native/AppCategories.swift.
+    category = str(data.get('category', ''))[:40]
+    tone = str(data.get('tone', ''))[:20]
     title = str(data.get('window_title', ''))[:200]
     domain = str(data.get('domain', ''))[:100]
     nearby = str(data.get('nearby', ''))[:4000]
@@ -25,6 +28,7 @@ def normalize_context(data):
                 seen.add(term.casefold())
     # Explicit personal spellings plus observed context; no fixed project word list.
     return {'initial': initial, 'latest': latest, 'after': after, 'selected': selected, 'app':app, 'scene':scene,
+            'category': category, 'tone': tone,
             'window_title':title, 'domain': domain, 'nearby':nearby,
             'personal_terms': personal,
             'layout_policy': 'paragraphs' if data.get('layout_policy') == 'paragraphs' else 'minimal',
@@ -38,4 +42,5 @@ def add_visible_text(context, text):
     if not text.strip():
         return context
     joined = '\n'.join(x for x in (context.get('nearby', ''), text) if x)
-    return normalize_context({**context, 'nearby': joined})
+    # Keep what was added after normalization (learned habits, kept words).
+    return {**context, **normalize_context({**context, 'nearby': joined})}

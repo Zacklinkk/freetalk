@@ -70,7 +70,16 @@ import Foundation
         let devices = MicDevices.all(), current = MicDevices.selected(uid:nil,devices:devices)
         precondition(current == nil || current!.id == MicDevices.defaultInputID())
         precondition(MicDevices.selected(uid:"missing-test-device",devices:devices) == nil)
-        print("Correction extraction, punctuation/meaning/number guards, accent-tolerant pinyin gate, ASR/cleanup attribution, reinforcement and decay, automatic learning, scoped undo, 0600, device resolution passed")
+        // The learner watches 90 s at least, 30 s after each edit, 10 minutes at most.
+        let began = Date(timeIntervalSince1970: 1_800_000_000)
+        func end(_ elapsed: TimeInterval, lastEdit: TimeInterval?) -> String? {
+            LearningWindow.endReason(began: began, lastEdit: lastEdit.map { began.addingTimeInterval($0) }, now: began.addingTimeInterval(elapsed))
+        }
+        precondition(end(89, lastEdit: nil) == nil && end(90, lastEdit: nil) == "90 秒内没有改字")
+        precondition(end(95, lastEdit: 70) == nil && end(100, lastEdit: 70) == "改字后 30 秒没有新的修改")
+        precondition(end(40, lastEdit: 5) == nil, "an early edit does not shorten the 90 s base")
+        precondition(end(599, lastEdit: 590) == nil && end(600, lastEdit: 590) == "已观察 10 分钟")
+        print("Correction extraction, punctuation/meaning/number guards, accent-tolerant pinyin gate, ASR/cleanup attribution, reinforcement and decay, automatic learning, scoped undo, 0600, device resolution, learning window passed")
         print("Current system input:",current?.name ?? "none")
     }
 }

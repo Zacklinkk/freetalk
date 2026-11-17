@@ -139,10 +139,10 @@ extension AppDelegate {
 
     @objc func richTextChanged(_ sender: NSButton) { UserDefaults.standard.set(sender.state == .on, forKey: "richTextPaste") }
 
-    /// HTML for structured text in apps that paste rich text; never for terminals or code editors.
+    /// HTML for structured text in apps that paste rich text; never for terminals, code editors or AI prompt boxes.
     func richHTML(_ text: String) -> String? {
         guard UserDefaults.standard.object(forKey: "richTextPaste") as? Bool ?? true, let target = target,
-              !["terminal", "development"].contains(InputSnapshot.scene(for: target.bundle)) else { return nil }
+              !target.category.plainTextOnly else { return nil }
         return RichText.html(text)
     }
 }

@@ -612,34 +612,31 @@ struct InputSnapshot {
     func failureReason() -> String? { do { _ = try resolve(); return nil } catch { return error.localizedDescription } }
     func currentAnchor() -> CGRect? { guard let now = try? resolveState() else { return anchor }; return Self.caretRect(now.element, now.range) ?? axRect(now.element) ?? anchor }
     var bundle: String { NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "" }
-    /// A style hint from the app: terminal, development, conversation or general.
-    static func scene(for bundle: String) -> String {
-        let id = bundle.lowercased()
-        if ["terminal","iterm"].contains(where:id.contains) { return "terminal" }
-        if ["codex","comate","vscode","xcode","cursor"].contains(where:id.contains) { return "development" }
-        if ["doubao","chat","hi.mac","wechat"].contains(where:id.contains) { return "conversation" }
-        return "general"
-    }
+    /// The kind of app (chat, email, code editor…), from the bundle ID or, in a browser, the page.
+    var category: AppCategory { AppCategory.of(bundle: bundle, name: name, url: identity.document) }
     /// The web page's domain, never its path or query (which can hold tokens).
     var domain: String {
         guard let url = URL(string: identity.document), ["http", "https"].contains(url.scheme ?? ""), let host = url.host else { return "" }
         return host
     }
     /// Text before the caret, the selection and text after it, for disambiguation.
+    /// The kind of app and its tone choose local rules only (never part of the
+    /// model's prompt), so they are sent even when context is off.
     func context(enabled: Bool) -> [String: Any] {
-        guard enabled else { return [:] }
+        let category = self.category
+        let style: [String: Any] = ["category": category.rawValue, "tone": DictationTone.chosen(for: category).rawValue]
+        guard enabled else { return style }
         let text = value as NSString
         let start = max(0, range.location - 1000)
         let selectionEnd = range.location + range.length
         let bundle = self.bundle
-        let scene = Self.scene(for: bundle)
         let visible = UserDefaults.standard.bool(forKey:"windowContextEnabled") && WindowText.allowed(bundle: bundle)
-        return ["app":name,"scene":scene,"window_title":identity.windowTitle,"domain":domain,
+        return style.merging(["app":name,"scene":category.scene,"window_title":identity.windowTitle,"domain":domain,
                 "nearby":visible ? nearbyText() : "",
                 "initial": text.substring(to: min(text.length, 500)),
                 "latest": text.substring(with: NSRange(location: start, length: range.location - start)),
                 "selected": text.substring(with: NSRange(location: range.location, length: min(2000, range.length))),
-                "after": text.substring(with: NSRange(location: selectionEnd, length: min(500, text.length - selectionEnd)))]
+                "after": text.substring(with: NSRange(location: selectionEnd, length: min(500, text.length - selectionEnd)))]) { _, new in new }
     }
     private func nearbyText() -> String {
         // Bounded to the selected input's containing pane and current window.

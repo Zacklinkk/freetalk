@@ -147,6 +147,12 @@ class Editor:
         from numerals import normalize
         text, count = normalize(text, context.get('personal_terms', ()))
         meta['number_formats'] = count
+        # The tone chosen for this kind of app, then the user's own habits,
+        # learned from their edits after insertion; a habit wins over the preset.
+        from tone import apply as apply_tone
+        text, meta['tone_edits'] = apply_tone(text, context)
+        from style_learning import apply as apply_style
+        text, meta['style_edits'] = apply_style(text, context)
         meta['term_formats'] = term_count
         meta['confirmed_corrections'] = alias_count
         meta['policy'] = policy
@@ -181,7 +187,8 @@ class Editor:
                              "model_used": False, "preclean_edits": preliminary, "reason": "fast_only" if policy == "fast" else "no_semantic_edit_needed",
                              "signals": signals}
         from filler_selection import candidates
-        fill = candidates(raw, context.get('scene', ''))
+        from edits import particle_scene
+        fill = candidates(raw, particle_scene(context), tuple(context.get('keep_words') or ()))
         if self.mode == 'edits' and fill and not {'self_correction','spoken_restart','possible_repeat','adjacent_restart'}.intersection(signals) and not hints:
             text, metadata = self.select_fillers(raw, fill, timeout - (time.perf_counter()-started))
             metadata.update(preclean_edits=preliminary, signals=signals)

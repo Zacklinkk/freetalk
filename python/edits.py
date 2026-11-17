@@ -4,9 +4,14 @@ import json
 import re
 from functools import lru_cache
 from disfluency import LITERALS, START_CUE, EN_CUE, RESTART_HEAD, JOINED_CUE, adjacent_repetitions, correction_signal, strip_repair_cue
+from tone import keeps_particles
 
 def core(text):
     return re.sub(r'[\W_]', '', text).lower()
+
+def particle_scene(context):
+    """The scene the particle rules see: a chat, or an app where the user chose 口语, keeps them."""
+    return 'conversation' if keeps_particles(context) else (context or {}).get('scene', '')
 
 # How a spoken list item starts: 第一，/第二步，/首先，/其次，/一是. 最后，
 # continues a list but never starts one (see explicit_list_ids).
@@ -388,9 +393,12 @@ def preclean(raw, context=None):
     patches=[]
     names = [row['term'] for row in (context or {}).get('terms', []) if row.get('source') == 'personal' and len(row['term']) >= 2]
     name_spans = [(m.start(), m.end()) for name in names for m in re.finditer(re.escape(name), raw)]
+    # Words the user put back after cleanup removed them (style_learning).
+    keep = tuple((context or {}).get('keep_words') or ())
     def add(start,end,new,particle=False):
         if protected_span(raw,start,end) or any(start<r and end>l for l,r,_ in patches): return
         if any(start<r and end>l for l,r in name_spans): return
+        if any(core(raw[start:end]).count(w) > core(new).count(w) for w in keep): return
         if not particle and removes_particle(raw,raw[start:end],new,start): return
         patches.append((start,end,new))
     for m in re.finditer(r'呃+(?!逆)[，,、 \t]*',raw):
@@ -403,7 +411,7 @@ def preclean(raw, context=None):
     # responses and lexical/quoted mentions remain protected above. In a chat
     # with a person the particle is the tone of the message and stays.
     for m in re.finditer(r'[啊呀]+(?=[，,。！!；;]|$)',raw):
-        if (context or {}).get('scene')=='conversation':break
+        if keeps_particles(context):break
         clause=re.split(r'[，,。！？!?；;\n]',raw[:m.start()])[-1]
         if len(core(clause))>=6 and not re.search(r'发出|喊出|读作|写作|唱出',clause):add(m.start(),m.end(),'',particle=True)
     # 然后就是 after a clause keeps 然后, which orders the two steps
@@ -844,7 +852,7 @@ def apply_plan(raw, plan, context):
         # Some models put the already-adjacent suffix in new instead of leaving
         # it outside old. Recover only an independently valid filler deletion;
         # never duplicate that suffix or reinterpret a substantive replacement.
-        if start>=0 and new and raw[end:].startswith(new) and contextual_cleanup(raw,old,'',start,edit.get('kind'),context.get('scene','')):
+        if start>=0 and new and raw[end:].startswith(new) and contextual_cleanup(raw,old,'',start,edit.get('kind'),particle_scene(context)):
             new=''
         # Models often drop the closing mark when an edit reaches the end of
         # the dictation; the speaker still ended the sentence.
@@ -859,8 +867,9 @@ def apply_plan(raw, plan, context):
                     patches.extend(candidates);groups.append((candidates[0],candidates[1]));repair_count+=1;continue
         if not reason and core(old)==core(new) and old!=new:reason=punctuation_problem(raw,old,new,start)
         if not reason and protected_span(raw,start,end):reason='literal_span'
+        if not reason and any(core(old).count(w) > core(new).count(w) for w in context.get('keep_words') or ()):reason='kept_word'
         if not reason and rewrites_learned_alias(raw,old,new,start,end,context):reason='learned_alias_requires_audio'
-        discourse=contextual_cleanup(raw,old,new,start,edit.get('kind'),context.get('scene',''))
+        discourse=contextual_cleanup(raw,old,new,start,edit.get('kind'),particle_scene(context))
         repetition=repetition_cleanup(raw,old,new,start)
         spelling=edit.get('kind')=='spelling' and grounded_spelling(raw,old,new,context)
         if not spelling and edit.get('kind')=='spelling':
