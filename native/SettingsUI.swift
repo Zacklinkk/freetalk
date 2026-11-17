@@ -133,6 +133,7 @@ extension AppDelegate {
         addSettingsPage(settingsPage("常用词与学习",subtitle:"让名字、缩写和项目术语保持正确的拼写。",cards:[
             card("个人词库","每行一个词，保存你常用的写法。下一次录音起生效。",views:[button("管理常用词…",#selector(showVocabulary))]),
             card("从改字学习","输入后在同一输入框里改字：改正的词、删掉的口水词和调整的标点都会学习，并显示5秒撤销提示。至少观察 90 秒，每次改字后再等 30 秒，最长 10 分钟。",views:[learningButton,button("管理已学会的词和习惯…",#selector(showCorrections)),learningStatusLabel()]),
+            nightly.makeCard(),
             DisclosureSection(title:"专业配置",subtitle:"学习规则、整理规则优化",key:"learningAdvancedExpanded",views:[
                 card("学习规则",views:[label("会区分是识别听错还是整理改错：识别听错的词用于语音识别和辨词；整理改错的地方会记下来，供下面的「整理规则优化」使用。数量、否定和整段改写不学习。删掉整理留下的口水词（就是、然后、那个，）、补回被删的语气词、去掉或补上句末句号、在连接词前加逗号、中英文之间加空格，会记成整理习惯：删除和改动类的习惯出现两次后生效，补回的词立即保留；语气词和句号按应用类别分别记录。中文学读音相同或只差一个字母的改字（z/zh、c/ch、n/l、an/ang 这类口音差别），正确写法自动加入词库。重复出现会加强，长期未再出现会自动失效。\n专业词（例如星河知识库、项目名称、SFT）在语音识别和文字整理时都会作为辨词参考。",size:12,color:.secondaryLabelColor)]),
                 promptTuning.makeCard()])],scrollable:true))
@@ -174,7 +175,7 @@ extension AppDelegate {
     @objc func selectSettingsPage(_ button: NSButton) {
         settingsTabs.selectTabViewItem(at:button.tag)
         if button.tag == 1 { recentHistoryView?.refresh() }
-        if button.tag == 2 { promptTuning.refresh() }
+        if button.tag == 2 { promptTuning.refresh(); nightly.refresh() }
         if button.tag == 5 { meetingView?.refreshEntries() }
         for entry in sidebarButtons { entry.state = entry === button ? .on : .off }
     }

@@ -229,6 +229,15 @@ def hotwords(context):
     return (relevant + rest)[:MAX_ACTIVE_TERMS]
 
 
+def asr_hotwords(context):
+    """Hotwords for transcription: hotwords(context), then the profile's domain
+    terms (benchmark, LoRA) in the slots left. Cleanup never sees profile terms."""
+    terms = hotwords(context)
+    seen = {term.casefold() for term in terms}
+    extra = [term for term in context.get('profile_terms', []) if term.casefold() not in seen]
+    return (terms + extra)[:MAX_ACTIVE_TERMS]
+
+
 def loose_sound(syllable):
     """Pinyin with the usual confusions merged: zh/z, ch/c, sh/s, ang/an, eng/en, ing/in."""
     return re.sub(r'([aei])ng$', r'\1n', re.sub(r'^([zcs])h', r'\1', syllable))

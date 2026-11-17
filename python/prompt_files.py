@@ -11,7 +11,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EDITABLE = ('edit-rules.txt', 'edit-plan.txt', 'edit-plan-examples.json', 'restart-plan.txt',
-            'restart-plan-examples.json', 'filler-selection.txt', 'prompt-tuning.txt', 'prompt-rewrite.txt', 'translation.txt')
+            'restart-plan-examples.json', 'filler-selection.txt', 'prompt-tuning.txt', 'prompt-rewrite.txt', 'translation.txt',
+            'user-profile.txt')
 # The directory holding edited copies; the worker sets it from config['supportPath'].
 overrides = None
 # An edit being checked against the eval set before it is saved (name → text).

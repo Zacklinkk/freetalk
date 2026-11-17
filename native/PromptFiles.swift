@@ -15,6 +15,7 @@ struct PromptFiles {
         ("prompt-tuning.txt", "规则优化", "「整理规则优化」发给云端模型的提示词。"),
         ("prompt-rewrite.txt", "规则重写", "整理偏好积累到 8 条时，请强模型把它们并入整理规则所用的提示词。"),
         ("translation.txt", "翻译输入", "翻译输入时发给翻译模型的系统提示词；目标语言随原文一起发送。"),
+        ("user-profile.txt", "用户画像", "夜间整理时，请强模型根据口述高频词推断你常谈的领域和转写热词所用的提示词。"),
     ]
 
     /// Prompts the cleanup eval set can measure; the others are saved without it.

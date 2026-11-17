@@ -24,11 +24,12 @@ native_test HotkeyTests native/Input.swift native/Audio.swift native/WindowText.
 native_test InputIdentityTests native/Input.swift native/Audio.swift native/WindowText.swift native/RichText.swift native/AppCategories.swift
 native_test RichTextTests native/RichText.swift native/WindowText.swift native/Input.swift native/Audio.swift native/AppCategories.swift
 native_test AppCategoryTests native/AppCategories.swift
+native_test UserProfileTests native/UserProfile.swift
 native_test HistoryTests native/History.swift
 native_test VocabularyTests native/Vocabulary.swift
 native_test CorrectionsTests native/Corrections.swift native/Vocabulary.swift native/Input.swift native/Audio.swift native/WindowText.swift native/RichText.swift native/AppCategories.swift
 native_test CleanupFeedbackTests native/CleanupFeedback.swift native/Input.swift native/Audio.swift native/WindowText.swift native/RichText.swift native/AppCategories.swift
-native_test CloudCredentialsTests native/CloudEditor.swift native/Audio.swift -framework Security
+native_test CloudCredentialsTests native/CloudEditor.swift native/Audio.swift native/UserProfile.swift -framework Security
 native_test PromptFilesTests native/PromptFiles.swift
 native_test SetupMigrationTests native/ModelSetup.swift
 native_test SetupProcessTests native/ModelSetup.swift
