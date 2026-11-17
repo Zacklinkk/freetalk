@@ -41,7 +41,7 @@ Public builds are not Apple-notarized. If macOS blocks the first launch, verify 
 - **Translate as you dictate.** Right Option + T (configurable) cleans the dictation and inserts a translation, by the fast cloud model when enabled or the local model otherwise. A translation that drops a number, link or code is not inserted; the cleaned original is.
 - **Optional cloud models.** One OpenAI- or Anthropic-compatible service with a fast model (cleanup, translation) and a strong model (rule tuning, meeting writing), switched on per feature. Visible window text never leaves the Mac.
 - **Learn with undo.** Reliable local corrections can suggest vocabulary entries, with an undo notice. Learning does not permanently ban a word or automatically fine-tune model weights. Fillers you delete, particles you put back and punctuation you adjust become cleanup habits that apply from their second occurrence.
-- **Tone per kind of app.** Chats, email, documents and other kinds of app can each be natural, formal or casual. About 170 common apps and 90 websites are categorized; in a browser the page's domain decides.
+- **Tone per kind of app.** Chats, email, documents and other kinds of app can each be natural, formal or casual. About 180 common apps and 90 websites are categorized; in a browser the page's domain decides.
 - **Choose your shortcuts.** The default is a right-Option tap; meetings use right Option + M. Record a single modifier or a chord in Settings. Meeting shortcuts can follow the dictation key or be recorded separately. **Test shortcut** listens for 8 seconds and distinguishes missing permission, a consumed event and a mismatched binding without recording.
 - **Control the device and duration.** Follow the system microphone or select one. Dictation limits range from 30 to 600 seconds; new users start at 3 minutes. The last 10 seconds show a countdown and a smooth mint-to-red transition, respecting Reduce Motion.
 - **Find previous results.** Browse and copy the latest 500 text entries. Older entries roll off. Ordinary dictation audio is not retained.
@@ -50,7 +50,7 @@ Before inserting, freetalk checks the app, input field, draft and cursor. Switch
 
 ## Meetings: local basics, optional cloud writing
 
-Enable Meetings before use. The default **right Option + M** (customizable in Settings) starts or stops microphone recording. Import WAV, M4A, MP3 or FLAC. Meeting recording has an 8-hour limit and currently does not capture system playback audio.
+Enable Meetings before use. The default **right Option + M** (customizable in Settings) starts or stops microphone recording. Import WAV, M4A, MP3 or FLAC. Meeting recording has an 8-hour limit. For calls, the sound the Mac plays can be recorded as a second track: the microphone and the remote side are transcribed separately and labeled 本机 (local) and 远端 (remote) in the transcript (needs the Screen Recording permission).
 
 Local ASR and the local editor always produce the transcript, basic minutes and mind map first. An optional ~107 MB diarization model labels anonymous speakers within the meeting and overlapping segments. It does not identify real people or reliably recover every simultaneously spoken word.
 

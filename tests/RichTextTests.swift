@@ -33,6 +33,11 @@ import AppKit
         precondition(text.contains("夏普比率") && text.contains("freetalk"), text)
         precondition(text.components(separatedBy: "\n").first?.contains("夏普") == true, "top line first: \(text)")
         precondition(!WindowText.allowed(bundle: "com.1password.1password") && WindowText.allowed(bundle: "com.tencent.xinWeChat"))
+        // A window is captured at its own pixel scale, capped at 2600 pixels on its long side.
+        let external = WindowText.captureSize(CGRect(x: 0, y: 0, width: 673, height: 439), pixelScale: 1)
+        let retina = WindowText.captureSize(CGRect(x: 0, y: 0, width: 673, height: 439), pixelScale: 2)
+        let wide = WindowText.captureSize(CGRect(x: 0, y: 0, width: 3000, height: 1600), pixelScale: 2)
+        precondition(external == (673, 439) && retina == (1346, 878) && wide.width == 2600 && wide.height == 1386, "\(external) \(retina) \(wide)")
         print("Rich text passed: numbered lists, paragraphs, escaping, plain text untouched, tolerant check; window text recognition read Chinese and English")
     }
 }

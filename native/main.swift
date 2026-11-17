@@ -6,7 +6,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     enum Phase { case idle, preparing, recording, processing }
     let worker = VoiceWorker(), recorder = Recorder(), hotkey = GlobalHotkey(), inserter = TextInserter()
     let deviceMonitor = MicDeviceMonitor()
-    let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/freetalk", isDirectory: true)
+    let support: URL = {
+        #if E2E_HOOKS
+        // The end-to-end checks run on a copy, never on the user's own history and lessons.
+        if let path = ProcessInfo.processInfo.environment["FREETALK_E2E_SUPPORT"], !path.isEmpty { return URL(fileURLWithPath: path, isDirectory: true) }
+        #endif
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/freetalk", isDirectory: true)
+    }()
     lazy var modelSetup = ModelSetup(support:support,resources:Bundle.main.resourceURL!)
     lazy var onboarding = OnboardingController(app:self)
     var modelSetupView: ModelDownloadView?
@@ -110,6 +116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSApp.terminate(nil); return
         }
         NSApp.setActivationPolicy(.accessory)
+        #if E2E_HOOKS
+        // Before anything reads cloud credentials (see E2EHooks.init).
+        e2eHooks = E2EHooks(app: self)
+        #endif
         do {
             let legacy = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Local Voice",isDirectory:true)
             try LegacyMigration.migrate(from:legacy,to:support)

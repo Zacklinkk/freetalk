@@ -48,12 +48,20 @@ enum WindowText {
             ?? windows.first { !title.isEmpty && $0.title == title }
             ?? windows.max { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
         guard let window else { return nil }
-        let configuration = SCStreamConfiguration()
-        // Enough pixels for small UI text; capped so a 6K window stays cheap.
-        let scale = min(2.0, 2600 / max(window.frame.width, window.frame.height))
-        configuration.width = Int(window.frame.width * scale); configuration.height = Int(window.frame.height * scale)
-        configuration.showsCursor = false
-        return try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: window), configuration: configuration)
+        let filter = SCContentFilter(desktopIndependentWindow: window), configuration = SCStreamConfiguration()
+        let size = captureSize(window.frame, pixelScale: CGFloat(filter.pointPixelScale))
+        configuration.width = size.width; configuration.height = size.height
+        // Scale rather than leave the window in one corner of a larger canvas,
+        // where Vision reads nothing (a 1x external display at a 2x size).
+        configuration.scalesToFit = true; configuration.showsCursor = false
+        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+    }
+
+    /// Output pixels for a window: its own pixels (1x on most external displays,
+    /// 2x on Retina), capped at 2600 on the long side so a 6K window stays cheap.
+    static func captureSize(_ frame: CGRect, pixelScale: CGFloat) -> (width: Int, height: Int) {
+        let scale = min(max(1, pixelScale), 2600 / max(1, frame.width, frame.height))
+        return (Int(frame.width * scale), Int(frame.height * scale))
     }
 
     static func read(_ image: CGImage) -> String {

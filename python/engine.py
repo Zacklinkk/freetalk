@@ -359,6 +359,20 @@ class Editor:
                          seconds=time.perf_counter()-started)
 
 
+def pause_threshold(levels, configured=.008, floor=.0008):
+    """RMS below which a 20 ms frame counts as a pause between segments.
+
+    The configured level suits normal speech. Quiet or whispered speech can
+    sit below it entirely; then every frame looks like a pause and a long
+    dictation is cut mid-word every 8 seconds. So the threshold follows the
+    speaker: a quarter of the loud frames' level, never above the configured one.
+    """
+    import numpy as np
+    if not len(levels):
+        return configured
+    return min(configured, max(floor, .25 * float(np.percentile(levels, 90))))
+
+
 class Engine:
     def __init__(self, config, emit=lambda value: None):
         import fcntl
@@ -419,6 +433,8 @@ class Engine:
         self.audio = np.zeros(0, dtype=np.float32)
         self.offset = 0
         self.segments = []
+        # Level of every 20 ms frame so far, for the pause threshold.
+        self.levels, self.unleveled = [], np.zeros(0, dtype=np.float32)
 
     def transcribe(self, audio, offset):
         import mlx.core as mx
@@ -444,6 +460,12 @@ class Engine:
         import numpy as np
         new = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768
         self.audio = np.concatenate([self.audio, new])
+        self.unleveled = np.concatenate([self.unleveled, new])
+        n = len(self.unleveled) // 320
+        if n:
+            frames = self.unleveled[:n * 320].reshape(n, 320)
+            self.levels += np.sqrt(np.mean(frames * frames, axis=1)).tolist()
+            self.unleveled = self.unleveled[n * 320:]
         # Stable pause boundaries only. Hard cap bounds work for uninterrupted speech.
         while len(self.audio):
             duration = len(self.audio) / 16000
@@ -452,7 +474,7 @@ class Engine:
                 frame = 320
                 powers = np.array([np.sqrt(np.mean(x * x)) for x in
                     np.array_split(self.audio[-16000:], 50)])
-                silent = powers < self.config.get("silenceRms", .008)
+                silent = powers < pause_threshold(self.levels, self.config.get("silenceRms", .008))
                 if len(silent) >= 25 and bool(np.all(silent[-25:])):
                     cut = len(self.audio)
                 elif duration >= self.config.get("segmentMaxSeconds", 20):

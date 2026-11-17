@@ -262,18 +262,31 @@ final class CorrectionLearner {
         let id = sessionID
         timer = Timer.scheduledTimer(withTimeInterval:0.6,repeats:true) { [weak self] _ in
             guard let self = self else { return }
-            if let reason = LearningWindow.endReason(began: began, lastEdit: lastEdit) { self.end(reason); return }
+            // An edit made just before the session ends (a full stop deleted, then
+            // the message sent at once) still teaches; so does taking one back.
+            let finish = { (reason: String) in
+                if lastSeen != savedValue, !lastSeen.isEmpty, !(savedValue.isEmpty && lastSeen == inserted) { self.onEdit?(id, raw, inserted, lastSeen, target) }
+                self.end(reason)
+            }
+            if let reason = LearningWindow.endReason(began: began, lastEdit: lastEdit) { finish(reason); return }
             if IsSecureEventInputEnabled() { self.end("进入安全输入"); return }
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else { self.end("切换到了其他应用"); return }
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else { finish("切换到了其他应用"); return }
             guard let focused = focusedElement(target.pid),
-                  !(axAttribute(focused,kAXSubroleAttribute) as? String ?? "").localizedCaseInsensitiveContains("secure") else { self.end("输入框失去焦点"); return }
+                  !(axAttribute(focused,kAXSubroleAttribute) as? String ?? "").localizedCaseInsensitiveContains("secure") else { finish("输入框失去焦点"); return }
             let same = CFEqual(focused,target.element) || (target.window != nil && axWindow(focused) != nil && CFEqual(target.window!,axWindow(focused)!) && target.identity.matchesReplacement(InputIdentity.read(focused)))
-            guard same else { self.end("焦点移到了另一个输入框"); return }
-            guard let read = axAttribute(focused,kAXValueAttribute) as? String, read.utf16.count <= 200_000 else { self.end("该应用不提供输入框文字"); return }
+            guard same else { finish("焦点移到了另一个输入框"); return }
+            guard let read = axAttribute(focused,kAXValueAttribute) as? String, read.utf16.count <= 200_000 else { finish("该应用不提供输入框文字"); return }
             let value = plain(read)
             // Sending a message empties the field: the session is over, not broken.
-            guard value.hasPrefix(prefix), value.hasSuffix(suffix), value.count >= prefix.count+suffix.count else { self.end(value.isEmpty ? "内容已发送或清空" : "插入位置之外的文字被改动"); return }
+            guard value.hasPrefix(prefix), value.hasSuffix(suffix), value.count >= prefix.count+suffix.count else { finish(value.isEmpty ? "内容已发送或清空" : "插入位置之外的文字被改动"); return }
             let edited = String(value.dropFirst(prefix.count).dropLast(suffix.count))
+            // Nothing left of the dictation: it was sent, or deleted to be said again.
+            // Only a last version close to full length is worth learning from; a
+            // half-deleted one is the deletion in progress.
+            if edited.isEmpty {
+                if lastSeen.count * 2 < inserted.count { self.session?.final = nil; lastSeen = savedValue }
+                finish("内容已发送或清空"); return
+            }
             self.session?.final = edited == inserted ? nil : edited
             // Every change, even one taken back, keeps the window open.
             if edited != lastSeen { lastSeen = edited; lastEdit = Date() }
