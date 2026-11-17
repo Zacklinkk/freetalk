@@ -426,8 +426,8 @@ class Engine:
         started = time.perf_counter()
         if len(audio) < 1600 or float(np.max(np.abs(audio))) < .002:
             return "", 0.0
-        from vocabulary import hotwords
-        hints = hotwords(self.context)
+        from vocabulary import asr_hotwords
+        hints = asr_hotwords(self.context)
         self.emit({"event": "model-request", "stage": "asr", "sample_offset": offset,
                    "sample_count": len(audio), "sample_rate": 16000,
                    "audio_sha256": hashlib.sha256(audio.tobytes()).hexdigest(),

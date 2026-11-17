@@ -176,7 +176,7 @@ final class MeetingController: NSObject {
         processing = true; fraction = nil; message = "正在准备会议资料…"; app.correctionLearner.stop(); app.refreshUI(); onChange?()
         onComplete?(id)
         var payload: [String:Any] = ["support":app.support.path,"meeting_id":id]
-        payload["hotwords"] = (try? app.vocabularyStore.load()) ?? []
+        payload["hotwords"] = ((try? app.vocabularyStore.load()) ?? []) + (NightlySettings.load().usesProfile ? UserProfile.load(app.support)?.terms ?? [] : [])
         if let audio = audio { payload["audio_path"] = audio.path }
         if strongCloud {
             let cloud = CloudEditorSettings.load()

@@ -171,6 +171,14 @@ def main():
                                                   str(command.get("scope") or "general")[:40])}
             elif action == "undo_style":
                 result = {"undone": bool(styles and styles.undo(str(command.get("session", ""))))}
+            elif action == "build_profile":
+                # Word counts from the history go to the strong model; sentences never do.
+                from cloud_client import chat_client
+                from user_profile import build
+                settings = command.get("cloud") or {}
+                client = chat_client(settings.get("protocol", "openai"), settings.get("base_url", ""), settings.get("model", ""),
+                                     settings.get("api_key", ""), settings.get("headers"))
+                result = build(client, command.get("statistics", []), int(command.get("dictations", 0)))
             elif action == "style_list":
                 result = {"lessons": styles.listing() if styles else []}
             elif action == "style_remove":

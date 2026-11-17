@@ -18,6 +18,8 @@ def normalize_context(data):
     domain = str(data.get('domain', ''))[:100]
     nearby = str(data.get('nearby', ''))[:4000]
     personal = personal_terms(data.get('personal_terms', []))
+    # Domain terms from the nightly user profile: hotwords for transcription only.
+    profile = personal_terms(data.get('profile_terms', []))[:40]
     terms, seen = [], {term.casefold() for term in personal}
     # Terms seen only in the visible text are marked: like that text, they stay on this Mac.
     for text, source in (('\n'.join((initial, latest, after, selected, title)), None), (nearby, 'visible')):
@@ -30,7 +32,7 @@ def normalize_context(data):
     return {'initial': initial, 'latest': latest, 'after': after, 'selected': selected, 'app':app, 'scene':scene,
             'category': category, 'tone': tone,
             'window_title':title, 'domain': domain, 'nearby':nearby,
-            'personal_terms': personal,
+            'personal_terms': personal, 'profile_terms': profile,
             'layout_policy': 'paragraphs' if data.get('layout_policy') == 'paragraphs' else 'minimal',
             'personal_aliases': personal_aliases(data.get('personal_aliases', []), personal),
             'terms': [{'term': t, 'source': 'personal'} for t in personal] + [{'term': t, **({'source': s} if s else {})} for t, s in terms[:24]]}

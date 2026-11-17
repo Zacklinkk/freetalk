@@ -91,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var cloudEditor = CloudEditorPanel(app: self)
     lazy var promptTuning = PromptTuningPanel(app: self)
     lazy var promptEditor = PromptEditorPanel(app: self)
+    lazy var nightly = NightlyMaintenance(app: self)
     var learningStatus: NSTextField?
     var lastHotkeyAttempt = Date.distantPast
     var deviceList: [MicDevice] = []
@@ -141,7 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // update macOS asks here, not when the next recording starts.
         let cloudSettings = CloudEditorSettings.load()
         if cloudSettings.serviceReady && cloudSettings.readsKeyAtLaunch { CloudCredentialStore.prefetch(cloudSettings.baseURL) }
-        promptTuning.scheduleNightly()
+        nightly.schedule()
         appUpdater.canInstall = { [weak self] in
             guard let self = self else { return false }
             return self.phase == .idle && !self.inserter.busy && !self.modelSetup.busy && !self.meetings.busy
@@ -224,6 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         worker.onState = { [weak self] text, ready in
             guard let self = self else { return }
             self.modelText = text
+            self.nightly.refresh()
             if ready && self.phase == .idle {
                 self.setStatus(AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? "就绪 · 从菜单栏或 \(self.hotkey.binding.display) 开始" : "模型就绪 · 请先允许麦克风访问")
             }
@@ -616,8 +618,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !meetings.busy else { showMeetings(); return }
         if phase == .recording { stopRecording(); return }
         if phase == .preparing { cancelRecording(reload:false); return }
-        guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !appUpdater.installing, !promptTuning.busy, !promptEditor.checking else {
+        guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !appUpdater.installing, !promptTuning.busy, !promptEditor.checking, !nightly.busy else {
             if promptTuning.busy { setStatus("整理规则优化进行中，完成后再口述") }
+            if nightly.busy { setStatus("夜间整理进行中，完成后再口述") }
             if promptEditor.checking { setStatus("正在用测试集检查提示词，完成后再口述") }
             return
         }
@@ -647,6 +650,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         context["personal_aliases"] = aliases.filter { $0.weight() >= 0.25 }.sorted { $0.weight() > $1.weight() }
             .map { ["heard":$0.heard,"term":$0.term,"stage":$0.stage.rawValue,"count":$0.count] }
         context["layout_policy"] = layoutPicker.indexOfSelectedItem == 1 ? "paragraphs" : "minimal"
+        if NightlySettings.load().usesProfile, let profile = UserProfile.load(support) { context["profile_terms"] = profile.terms }
         setStatus("正在打开麦克风…")
         let policy = ["auto", "always", "fast"][cleanupPicker.indexOfSelectedItem]
         var begin: [String: Any] = ["context": context, "cleanup_policy": policy]
@@ -800,7 +804,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     /// The cloud card changed a setting that other pages show.
     func cloudSettingsChanged() {
-        promptTuning.refresh(); meetingView?.refreshState()
+        promptTuning.refresh(); nightly.refresh(); meetingView?.refreshState()
     }
     func cancelRecording(reload: Bool = true) {
         // Once the paste key has been delivered, cancellation cannot undo it.

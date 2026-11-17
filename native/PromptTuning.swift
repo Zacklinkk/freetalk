@@ -2,7 +2,7 @@ import AppKit
 
 /// Settings card: send collected cases to the strong cloud model, replay old
 /// and new rules on this Mac with the user's cases and the eval set, and adopt
-/// the new rules when neither got worse. Also runs once a night when enabled.
+/// the new rules when neither got worse. Nightly maintenance runs it too.
 final class PromptTuningPanel: NSObject {
     unowned let app: AppDelegate
     let store: CleanupFeedbackStore
@@ -14,7 +14,6 @@ final class PromptTuningPanel: NSObject {
     /// A rewritten rule text with the preferences merged in, waiting for the user.
     private var rewrite: String?
     private var pending: Bool { !proposal.isEmpty || rewrite != nil }
-    private var nightlyTimer: Timer?
     /// The worker is replaying cases; dictation waits until it finishes.
     private(set) var busy = false
     /// Waiting for the Keychain before a run starts; dictation is not blocked.
@@ -39,11 +38,11 @@ final class PromptTuningPanel: NSObject {
         // Called by the learner and the sidebar too; the buttons exist only once the card is built.
         guard run != nil, adopt != nil, discard != nil, reset != nil, clear != nil else { return }
         let count = store.load().count, active = CleanupPreferences.load(app.support)
-        let night = UserDefaults.standard.string(forKey: "nightlyTuningReport").map { "\n夜间优化：\($0)" } ?? ""
+        let night = UserDefaults.standard.string(forKey: "nightlyTuningReport").map { "\n夜间整理：\($0)" } ?? ""
         summary.stringValue = "已记录 \(count) 条插入后又被你改动的口述" + (active.isEmpty ? "，当前使用默认规则。" : "，当前使用 \(active.count) 条整理偏好：\n" + active.map { "· " + $0 }.joined(separator: "\n")) + night
         let cloud = CloudEditorSettings.load()
         let ready = cloud.serviceReady && cloud.tuning
-        run.isEnabled = !busy && !reading && count >= 3 && ready && app.worker.ready && app.phase == .idle && !app.meetings.busy && !pending
+        run.isEnabled = !busy && !reading && count >= 3 && ready && app.worker.ready && app.phase == .idle && !app.meetings.busy && !pending && !app.nightly.busy
         if !busy && !reading && !pending {
             if count < 3 { result.stringValue = "至少需要 3 条记录。" }
             else if !cloud.serviceReady { result.stringValue = "需要先在「语音输入 → 专业配置 → 云端模型」里填好服务、模型和密钥。" }
@@ -75,10 +74,11 @@ final class PromptTuningPanel: NSObject {
 
     private var idle: Bool {
         app.worker.ready && app.phase == .idle && !app.meetings.busy && !app.inserter.busy && !app.modelSetup.busy
-            && !app.appUpdater.installing && !app.promptEditor.checking && !busy && !reading && !pending
+            && !app.appUpdater.installing && !app.promptEditor.checking && !app.nightly.busy && !busy && !reading && !pending
     }
 
-    private func tune(_ payload: [String: Any], model: String, automatic: Bool) {
+    /// `done` gets the line for the nightly report when the run was automatic.
+    private func tune(_ payload: [String: Any], model: String, automatic: Bool, done finished: ((String) -> Void)? = nil) {
         let cases = store.load().map { ["raw": $0.raw, "inserted": $0.inserted, "final": $0.final] }
         // Recent dictations the user left alone: the new rules must not disturb them.
         let edited = Set(store.load().map(\.raw))
@@ -103,7 +103,7 @@ final class PromptTuningPanel: NSObject {
             case .failure(let error):
                 let reason = CloudEditorSettings.describe(fallback: error.localizedDescription)
                 self.result.stringValue = "未完成：\(reason)"
-                if automatic { self.report("未完成：\(reason)") }
+                if automatic { self.report("未完成：\(reason)", finished) }
             case .success(let value):
                 let proposed = value["rules"] as? [String] ?? []
                 let rewritten = value["prompt"] as? String
@@ -111,14 +111,14 @@ final class PromptTuningPanel: NSObject {
                 let reason = value["reason"] as? String ?? ""
                 if proposed.isEmpty && rewritten == nil {
                     self.result.stringValue = "强模型没有找到可靠的共性问题，规则保持不变。"
-                    if automatic { self.report("没有找到可靠的共性问题，规则不变") }
+                    if automatic { self.report("没有找到可靠的共性问题，规则不变", finished) }
                 } else if value["adopt"] as? Bool == true {
                     let done = rewritten == nil ? "已自动采用：\(reason)。下次口述生效。"
                         : "已把 \(merged.count) 条整理偏好并入整理规则：\(reason)。新规则可在「整理提示词」查看或恢复默认，下次口述生效。"
                     self.save(proposed, prompt: rewritten, model: model, message: done)
-                    if automatic { self.report(rewritten == nil ? "已自动采用 \(proposed.count) 条整理偏好（\(reason)）" : "已把 \(merged.count) 条整理偏好并入整理规则（\(reason)）") }
+                    if automatic { self.report(rewritten == nil ? "已自动采用 \(proposed.count) 条整理偏好（\(reason)）" : "已把 \(merged.count) 条整理偏好并入整理规则（\(reason)）", finished) }
                 } else if automatic {
-                    self.report("未采用：\(reason)")
+                    self.report("未采用：\(reason)", finished)
                 } else {
                     self.proposal = proposed; self.rewrite = rewritten
                     self.rules.stringValue = (rewritten == nil ? "建议的整理偏好：\n" + proposed.map { "· " + $0 }.joined(separator: "\n")
@@ -153,40 +153,25 @@ final class PromptTuningPanel: NSObject {
         } catch { result.stringValue = "保存失败：\(error.localizedDescription)" }
     }
 
-    private func report(_ text: String) {
+    private func report(_ text: String, _ finished: ((String) -> Void)? = nil) {
         let formatter = DateFormatter(); formatter.dateFormat = "M月d日 HH:mm"
         UserDefaults.standard.set("\(formatter.string(from: Date()))，\(text)", forKey: "nightlyTuningReport")
+        finished?(text)
     }
 
     // MARK: Nightly
 
-    /// Check every ten minutes whether tonight's run is due.
-    func scheduleNightly() {
-        nightlyTimer?.invalidate()
-        nightlyTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in self?.runNightlyIfDue() }
-    }
-
-    /// Once a night, between 00:30 and 06:00, when there are new cases and the
-    /// Mac has been idle for 15 minutes. A Keychain prompt at night would wait
-    /// for nobody, so a key that was never read this launch skips the night.
-    func runNightlyIfDue(now: Date = Date()) {
-        let cloud = CloudEditorSettings.load()
-        guard cloud.nightly, cloud.serviceReady, idle else { return }
-        let calendar = Calendar.current
-        let minutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
-        guard (30..<360).contains(minutes) else { return }
-        let defaults = UserDefaults.standard
-        if let last = defaults.object(forKey: "nightlyTuningLastRun") as? Date, calendar.isDate(last, inSameDayAs: now) { return }
-        if let recent = app.historyStore.entries.first?.createdAt, now.timeIntervalSince(recent) < 15 * 60 { return }
+    /// Nightly maintenance's rule-tuning step: runs when there are cases the
+    /// last run did not see (any three cases when the user clicked 立即运行).
+    /// `done` gets one line for the report, also when nothing ran.
+    func nightly(credentials: CloudCredentials, force: Bool, done: @escaping (String) -> Void) {
+        let cloud = CloudEditorSettings.load(), defaults = UserDefaults.standard
         let cases = store.load()
-        guard cases.count >= 3, let newest = cases.map(\.createdAt).max() else { return }
-        if let stamp = defaults.object(forKey: "nightlyTuningCasesStamp") as? Date, newest <= stamp { return }
-        defaults.set(now, forKey: "nightlyTuningLastRun")
-        guard let credentials = CloudCredentialStore.cached(cloud.baseURL) else {
-            report("钥匙串尚未授权，今晚跳过；白天测试一次云端连接即可"); refresh(); return
-        }
+        guard cases.count >= 3, let newest = cases.map(\.createdAt).max() else { done("改过的口述不到 3 条，跳过"); return }
+        if !force, let stamp = defaults.object(forKey: "nightlyTuningCasesStamp") as? Date, newest <= stamp { done("没有新的改字记录，跳过"); return }
+        guard !pending else { done("有一份建议等你决定，跳过"); return }
         defaults.set(newest, forKey: "nightlyTuningCasesStamp")
-        tune(cloud.payload(with: credentials, strong: true), model: cloud.strongName, automatic: true)
+        tune(cloud.payload(with: credentials, strong: true), model: cloud.strongName, automatic: true) { [weak self] line in self?.refresh(); done(line) }
     }
 
     @objc private func adoptRules() {

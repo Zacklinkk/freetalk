@@ -24,7 +24,6 @@ struct CloudEditorSettings {
     var translation = false
     var meetings = false
     var tuning = true
-    var nightly = false
 
     static func load() -> Self {
         let d = UserDefaults.standard
@@ -40,7 +39,6 @@ struct CloudEditorSettings {
         s.translation = d.bool(forKey: "cloudTranslationEnabled")
         s.meetings = d.bool(forKey: "cloudMeetingsEnabled")
         s.tuning = d.object(forKey: "cloudTuningEnabled") as? Bool ?? true
-        s.nightly = d.bool(forKey: "cloudNightlyTuning")
         return s
     }
 
@@ -49,7 +47,7 @@ struct CloudEditorSettings {
         d.set(enabled, forKey: "cloudCleanupEnabled"); d.set(protocolName, forKey: "cloudCleanupProtocol")
         d.set(baseURL, forKey: "cloudCleanupBaseURL"); d.set(model, forKey: "cloudCleanupModel"); d.set(timeout, forKey: "cloudCleanupTimeout")
         d.set(strongModel, forKey: "cloudStrongModel"); d.set(translation, forKey: "cloudTranslationEnabled")
-        d.set(meetings, forKey: "cloudMeetingsEnabled"); d.set(tuning, forKey: "cloudTuningEnabled"); d.set(nightly, forKey: "cloudNightlyTuning")
+        d.set(meetings, forKey: "cloudMeetingsEnabled"); d.set(tuning, forKey: "cloudTuningEnabled")
     }
 
     /// The model that rule tuning and meeting writing use.
@@ -57,10 +55,10 @@ struct CloudEditorSettings {
     /// Address, a model name and a stored key: enough to try either model.
     var serviceReady: Bool { !baseURL.isEmpty && !model.isEmpty && Self.hasSecret(baseURL) }
     /// Any feature that sends text to the service is switched on.
-    var anyFeature: Bool { enabled || translation || meetings || tuning || nightly }
+    var anyFeature: Bool { enabled || translation || meetings || tuning || NightlySettings.load().active }
     /// Features that run without a click need the key read at launch; the
     /// others read it when the user starts them.
-    var readsKeyAtLaunch: Bool { enabled || translation || nightly }
+    var readsKeyAtLaunch: Bool { enabled || translation || NightlySettings.load().active }
 
     /// The same endpoint rules as the worker, checked before anything is saved.
     static func validated(baseURL raw: String) throws -> String {
@@ -143,7 +141,8 @@ struct CloudEditorSettings {
         case "redirect": return "云端地址发生重定向"
         case "invalid_config": return "云端整理配置无效"
         case "invalid_json", "invalid_plan", "invalid_response", "empty_response", "truncated": return "云端返回格式无法使用"
-        case "http_401", "http_403": return "云端拒绝了 API Key"
+        case "http_401": return "云端拒绝了 API Key"
+        case "http_403": return "云端拒绝了请求（密钥无效或额度已用完）"
         case "http_429": return "云端请求过于频繁"
         default: return reason.hasPrefix("http_") ? "云端服务返回 \(reason.dropFirst(5))" : "云端整理不可用"
         }

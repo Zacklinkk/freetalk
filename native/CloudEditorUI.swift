@@ -11,7 +11,6 @@ final class CloudEditorPanel: NSObject {
     let translation = NSButton(checkboxWithTitle: "翻译输入（快模型；关闭时用本地模型翻译）", target: nil, action: nil)
     let meetings = NSButton(checkboxWithTitle: "会议深度整理与写作（强模型；本地基础纪要始终保留）", target: nil, action: nil)
     let tuning = NSButton(checkboxWithTitle: "整理规则优化（强模型，在「常用词与学习」里手动运行）", target: nil, action: nil)
-    let nightly = NSButton(checkboxWithTitle: "每晚自动优化整理规则（强模型，00:30 后空闲时运行一次）", target: nil, action: nil)
     let status = NSTextField(wrappingLabelWithString: "")
     private var testButton: NSButton!
 
@@ -31,7 +30,7 @@ final class CloudEditorPanel: NSObject {
         timeoutPicker.addItems(withTitles: CloudEditorSettings.timeouts.map { "\(Int($0)) 秒" })
         timeoutPicker.selectItem(at: CloudEditorSettings.timeouts.firstIndex(of: settings.timeout) ?? 1)
         timeoutPicker.setAccessibilityLabel("快模型超时")
-        for (box, on) in [(cleanup, settings.enabled), (translation, settings.translation), (meetings, settings.meetings), (tuning, settings.tuning), (nightly, settings.nightly)] {
+        for (box, on) in [(cleanup, settings.enabled), (translation, settings.translation), (meetings, settings.meetings), (tuning, settings.tuning)] {
             box.target = self; box.action = #selector(featuresChanged); box.state = on ? .on : .off
         }
         status.font = .systemFont(ofSize: 12); status.textColor = .secondaryLabelColor
@@ -41,7 +40,8 @@ final class CloudEditorPanel: NSObject {
                                          ("API Key", key), ("请求头", headers), ("快模型超时", timeoutPicker)])
         refresh()
         return app.card("云端模型（可选）", "默认全部在本机处理。填好服务后，按功能勾选要用云端的地方。", views: [
-            form, app.row([save, testButton]), app.label("使用云端的功能", size: 13), cleanup, translation, meetings, tuning, nightly, status,
+            form, app.row([save, testButton]), app.label("使用云端的功能", size: 13), cleanup, translation, meetings, tuning,
+            app.label("夜间整理（画像与转写热词、夜间整理规则优化）在「常用词与学习」里开启。", size: 12, color: .secondaryLabelColor), status,
             app.label("口述整理和翻译发送原稿、输入框文字、应用名、窗口标题、网站域名和个人词库；屏幕上的可见文字和文字识别结果始终只留在本机。规则优化发送插入后被你改过的口述记录（原稿、整理结果、你改后的文字）。会议写作发送本地纪要和引文。音频从不上传。云端结果和本地结果经过同样的安全校验；API Key 与请求头存入 macOS 钥匙串。", size: 12, color: .secondaryLabelColor)])
     }
 
@@ -56,7 +56,7 @@ final class CloudEditorPanel: NSObject {
 
     static func summary(_ s: CloudEditorSettings) -> String {
         let fast = [s.enabled ? "口述整理" : nil, s.translation ? "翻译" : nil].compactMap { $0 }
-        let strong = [s.meetings ? "会议写作" : nil, s.tuning ? "规则优化" : nil, s.nightly ? "夜间优化" : nil].compactMap { $0 }
+        let strong = [s.meetings ? "会议写作" : nil, s.tuning ? "规则优化" : nil, NightlySettings.load().active ? "夜间整理" : nil].compactMap { $0 }
         if fast.isEmpty && strong.isEmpty { return "当前没有勾选任何功能，全部使用本地模型。" }
         return "当前" + [fast.isEmpty ? nil : "\(fast.joined(separator: "、"))用快模型 \(s.model)",
                        strong.isEmpty ? nil : "\(strong.joined(separator: "、"))用强模型 \(s.strongName)"].compactMap { $0 }.joined(separator: "；") + "。"
@@ -76,7 +76,7 @@ final class CloudEditorPanel: NSObject {
 
     private func readFeatures(into s: inout CloudEditorSettings) {
         s.enabled = cleanup.state == .on; s.translation = translation.state == .on; s.meetings = meetings.state == .on
-        s.tuning = tuning.state == .on; s.nightly = nightly.state == .on
+        s.tuning = tuning.state == .on
     }
 
     /// Key and headers typed into the form; nil keeps what the Keychain has.
