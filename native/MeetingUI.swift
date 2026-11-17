@@ -21,6 +21,7 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     let enable = NSButton(checkboxWithTitle:"启用会议资料 · 可选功能",target:nil,action:nil)
     let diarization = NSButton(checkboxWithTitle:"区分说话人 · 额外下载约 107 MB",target:nil,action:nil)
     let retain = NSButton(checkboxWithTitle:"完成后保留本机录音",target:nil,action:nil)
+    let systemAudio = NSButton(checkboxWithTitle:"同时录制电脑播放的声音（线上会议的远端；需要“屏幕录制”权限）",target:nil,action:nil)
     let source = NSPopUpButton()
     let cloudDisclosure = NSButton(title:"云端深度整理与写作 · 可选",target:nil,action:nil)
     let cloudStatus = NSTextField(wrappingLabelWithString:"")
@@ -107,6 +108,8 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let host = MeetingOptionsDocument(frame:NSRect(x:0,y:0,width:600,height:900))
         diarization.state = controller.settings["diarization"] as? Bool == true ? .on : .off; diarization.target = self; diarization.action = #selector(optionsChanged)
         retain.state = controller.settings["retain_audio"] as? Bool == true ? .on : .off; retain.target = self; retain.action = #selector(optionsChanged)
+        systemAudio.state = controller.recordsSystemAudio ? .on : .off; systemAudio.target = self; systemAudio.action = #selector(optionsChanged)
+        let tracks = app.label("开启后，麦克风和电脑声音分两条音轨录制、分别转写：麦克风里的是本机，电脑声音里的是远端（开启说话人区分时再分出远端1、远端2）。没戴耳机时，麦克风会录到扬声器的声音，这些重复的句子按时间和文字比对后去掉；戴耳机效果最好。只录声音，不保存画面。",size:12,color:.secondaryLabelColor)
         source.addItems(withTitles:["Hugging Face 官方","HF-Mirror 镜像"]); source.selectItem(at:ModelDownloadSource.preferred == .mirror ? 1 : 0)
         downloadButton = action("下载 / 校验说话人模型",#selector(download))
         endpoint.placeholderString = "https://你的服务/v1"; endpoint.setAccessibilityLabel("会议云端 API 地址"); endpoint.stringValue = controller.settings["base_url"] as? String ?? ""
@@ -133,13 +136,13 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         optionsProgress.minValue = 0; optionsProgress.maxValue = 1; optionsProgress.style = .bar; optionsProgress.isIndeterminate = false
         saveTermsButton = action("保存术语",#selector(saveTerms))
         let termsRow = app.row([terms,saveTermsButton])
-        let all = stack([app.label("本地基础整理始终保留",size:18),diarization,app.row([source,downloadButton]),optionsStatus,optionsProgress,retain,termsRow,privacy,cloudDisclosure,cloudStatus,cloudBox,agent,action("复制 CLI 路径",#selector(copyCLI)),action("查看说话人模型与许可",#selector(openModelSource))],spacing:10)
+        let all = stack([app.label("本地基础整理始终保留",size:18),diarization,app.row([source,downloadButton]),optionsStatus,optionsProgress,systemAudio,tracks,retain,termsRow,privacy,cloudDisclosure,cloudStatus,cloudBox,agent,action("复制 CLI 路径",#selector(copyCLI)),action("查看说话人模型与许可",#selector(openModelSource))],spacing:10)
         terms.widthAnchor.constraint(greaterThanOrEqualToConstant:160).isActive = true
         terms.setContentHuggingPriority(.defaultLow,for:.horizontal)
         saveTermsButton.setContentCompressionResistancePriority(.required,for:.horizontal)
         all.translatesAutoresizingMaskIntoConstraints = false; host.addSubview(all)
         NSLayoutConstraint.activate([all.topAnchor.constraint(equalTo:host.topAnchor,constant:20),all.leadingAnchor.constraint(equalTo:host.leadingAnchor,constant:18),all.trailingAnchor.constraint(equalTo:host.trailingAnchor,constant:-18)])
-        for v in [privacy,agent,cloudBox!,optionsStatus,optionsProgress,termsRow] { v.widthAnchor.constraint(equalTo:all.widthAnchor).isActive = true }
+        for v in [privacy,agent,cloudBox!,optionsStatus,optionsProgress,termsRow,tracks] { v.widthAnchor.constraint(equalTo:all.widthAnchor).isActive = true }
         cloudStatus.widthAnchor.constraint(equalTo:all.widthAnchor).isActive = true
         let scroll = MeetingOptionsScroll(); scroll.hasVerticalScroller = true; scroll.drawsBackground = false; scroll.documentView = host; scroll.contentStack = all
         optionsScroll = scroll
@@ -154,7 +157,7 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         record.isEnabled = ready || controller.recording || controller.preparing; importButton.isEnabled = ready
         resumeButton.isEnabled = ready && selectedID != nil; cancelButton.isEnabled = running
         title.isEnabled = !running
-        for v in [diarization,retain,source] as [NSControl] { v.isEnabled = controller.enabled && !running }
+        for v in [diarization,retain,source,systemAudio] as [NSControl] { v.isEnabled = controller.enabled && !running }
         downloadButton.isEnabled = controller.enabled && diarization.state == .on && !running && app.phase == .idle
         cloudBox.isHidden = cloudDisclosure.state != .on
         cloudDisclosure.image = NSImage(systemSymbolName:cloudDisclosure.state == .on ? "chevron.down" : "chevron.right",accessibilityDescription:nil)
@@ -218,6 +221,8 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     @objc private func optionsChanged() {
         controller.settings["diarization"] = diarization.state == .on
         controller.settings["retain_audio"] = retain.state == .on
+        controller.settings["system_audio"] = systemAudio.state == .on
+        if systemAudio.state == .on && !WindowText.permitted { WindowText.requestPermission() }
         do { try controller.saveSettings() } catch { controller.showError(error) }
         refreshState()
     }

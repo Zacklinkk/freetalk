@@ -59,6 +59,122 @@ def intervals(duration, turns, maximum=20.0, minimum=4.0):
             yield a + (b-a)*i/n, a + (b-a)*(i+1)/n, active
 
 
+def transcribe_windows(asr, path, duration, turns, hotwords, done_until, on_row, on_window, offset=0., windows=None):
+    """ASR over one audio file, window by window.
+
+    Rows are passed to on_row with times shifted by `offset` seconds (a second
+    track that started later than the first); on_window(b) follows every
+    window. Without `windows` they cover the whole file (`intervals`); given
+    windows (meeting_tracks.speech_windows) cover only speech, and a window
+    without a speaker is silence and skipped.
+    """
+    speech_only = windows is not None
+    import numpy as np
+    import soundfile as sf
+    import mlx.core as mx
+    with sf.SoundFile(str(path)) as audio:
+        for a, b, speakers in (windows if speech_only else intervals(duration, turns)):
+            if b <= done_until + .001:
+                continue
+            # A single-track meeting transcribes every window, with or without speaker turns.
+            if speakers or not speech_only:
+                audio.seek(round(a*16000))
+                samples = audio.read(round((b-a)*16000), dtype='float32')
+                if len(samples) >= 1600 and float(np.sqrt(np.mean(samples*samples))) >= .0015:
+                    result = asr.generate(samples, language=None, hotwords=hotwords, temperature=0, repetition_penalty=1.05,
+                        max_tokens=min(1024, max(128, int((b-a)*22)+64)))
+                    mx.synchronize()
+                    text = result.text.strip()
+                    if text:
+                        row = dict(start=round(max(0., a+offset),3), end=round(max(0., b+offset),3), text=text,
+                                   speaker_ids=speakers, speaker_status='multiple_speakers' if len(speakers)>1 else 'model' if speakers else 'unknown', timestamp_precision='segment')
+                        row['speaker_turns'] = [dict(start=round(max(0., max(a,t['start'])+offset),3),end=round(max(0., min(b,t['end'])+offset),3),speaker=t['speaker']) for t in turns if t['start']<b and t['end']>a]
+                        row['overlap_seconds'] = round(overlap_duration(row['speaker_turns']),3)
+                        if row['overlap_seconds'] > 0: row['speaker_status'] = 'overlap'
+                        on_row(row)
+            on_window(b)
+
+
+def transcribe_tracks(store, meeting_id, tracks, hotwords, diarization, config, resume, load_asr, progress, timings):
+    """A two-track meeting: the microphone (本机) and the sound the Mac played
+    (远端), each transcribed on its own, then merged by time without the
+    microphone's echo of the speakers. Returns (segments, echo clauses dropped).
+
+    Each track keeps its transcript (track-mic.jsonl, track-system.jsonl) and
+    its progress in the manifest, so an interrupted run resumes and merging
+    again gives the same transcript.
+    """
+    import soundfile as sf
+    from meeting_models import diarize
+    from meeting_tracks import LOCAL, REMOTE, merge, own_turns, speech_levels, speech_windows, track_turns
+    directory = store.directory(meeting_id)
+    manifest = store.manifest(meeting_id)
+    # The system track started this many seconds after the microphone.
+    offset = float(manifest.get('system_offset_seconds') or 0)
+    started, plans = time.monotonic(), []
+    for name, path, label in zip(('mic', 'system'), tracks, (LOCAL, REMOTE)):
+        turns_path = directory / f'speaker-turns-{name}.json'
+        if turns_path.exists() and resume:
+            turns = json.loads(turns_path.read_text())
+        else:
+            # Windows follow the turns, so silence is never transcribed and a
+            # window ends where a speaker stops.
+            diarized = diarize(str(path), config.get('meetingDiarizationModel'), progress) if diarization else None
+            turns = track_turns(speech_levels(path), label, diarized)
+            atomic_json(turns_path, turns)
+        plans.append((name, path, label, sf.info(str(path)).duration, turns))
+    timings['diarization_seconds'] = round(time.monotonic()-started, 3)
+    asr = load_asr()
+    total, base, rows = sum(p[3] for p in plans), 0., {}
+    done = dict(manifest.get('track_progress') or {}) if resume else {}
+    for index, (name, path, label, duration, turns) in enumerate(plans):
+        file, shift = f'track-{name}.jsonl', offset if name == 'system' else 0.
+        # The other track's turns in this track's time: windows must not run across
+        # them. The microphone's echo of the speakers does not count as the other side.
+        move = offset if name == 'mic' else -offset
+        other = [{**t, 'start': t['start'] + move, 'end': t['end'] + move} for t in plans[1 - index][4]]
+        if name == 'system':
+            other = own_turns(other, turns)
+        if not resume:
+            (directory / file).unlink(missing_ok=True)
+        rows[name] = store.segments(meeting_id, file) if resume else []
+        until = max(done.get(name, 0), rows[name][-1]['end'] - shift if rows[name] else 0)
+        def add(row, name=name, file=file, label=label):
+            # Every row of a track has a known side, even where the speaker model found no one.
+            if not diarization or not row['speaker_ids']:
+                row = {**row, 'speaker_ids': row['speaker_ids'] or [label], 'speaker_status': 'track'}
+            store.append_segment(meeting_id, row, file); rows[name].append(row)
+        def window(b, name=name, base=base, duration=duration, label=label):
+            done[name] = b
+            store.update(meeting_id, stage='transcribe', track_progress=dict(done))
+            progress(stage='transcribe', completed=base + b, total=total, message=f'转写{label}声音 {int(b)} / {int(duration)} 秒')
+        transcribe_windows(asr, path, duration, turns, hotwords, until, add, window, offset=shift,
+                           windows=list(speech_windows(turns, other=other)))
+        base += duration
+    segments, dropped = merge(rows['mic'], rows['system'])
+    atomic_text(directory / 'transcript.jsonl', ''.join(json.dumps(s, ensure_ascii=False)+'\n' for s in segments))
+    return segments, dropped
+
+
+def track_seconds(path):
+    """A track's length; 0 for one that holds no audio (nothing played during the meeting)."""
+    import soundfile as sf
+    try:
+        return sf.info(str(path)).duration
+    except (RuntimeError, OSError):
+        return 0
+
+
+def file_digest(paths):
+    """One SHA-256 over the files in order; a second track joins the first."""
+    digest = hashlib.sha256()
+    for path in paths:
+        with Path(path).open('rb') as stream:
+            for block in iter(lambda: stream.read(1024*1024), b''):
+                digest.update(block)
+    return digest.hexdigest()
+
+
 def overlap_duration(turns):
     points = sorted({p for t in turns for p in (t['start'],t['end'])})
     return sum(b-a for a,b in zip(points,points[1:]) if len({t['speaker'] for t in turns if t['start']<b and t['end']>a})>1)
@@ -154,9 +270,7 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
             segments = store.segments(meeting_id)
             progress(stage='resume',message='复用完整原稿，重新生成纪要与脑图')
         else:
-            import numpy as np
             import soundfile as sf
-            import mlx.core as mx
             progress(stage='decode', message='准备录音文件')
             stage_start = time.monotonic()
             source = payload.get('audio_path')
@@ -169,57 +283,49 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
             info = sf.info(str(audio_path))
             if info.samplerate != 16000 or info.channels != 1 or info.duration <= 0:
                 raise ValueError('录音须为有效的 16 kHz 单声道音频')
-            digest = hashlib.sha256()
-            with audio_path.open('rb') as stream:
-                for block in iter(lambda: stream.read(1024*1024), b''):
-                    digest.update(block)
-            audio_digest = digest.hexdigest()
+            # A microphone recording can carry the sound the Mac played as a second track.
+            system_path = directory / 'system.wav'
+            tracks = [audio_path] + ([system_path] if system_path.exists() and track_seconds(system_path) > 0 else [])
+            audio_digest = file_digest(tracks)
             old_digest = manifest.get('audio_sha256')
             if old_digest and old_digest != audio_digest:
                 raise ValueError('录音内容已变化，请新建会议以保留原有引用')
+            resume = old_digest == audio_digest
             store.update(meeting_id, audio_retained=True, audio_sha256=audio_digest, duration_seconds=info.duration)
             timings['decode_seconds'] = round(time.monotonic()-stage_start,3)
             stage_start = time.monotonic()
             diarization = settings.get('diarization') is True
-            turns_path = directory / 'speaker-turns.json'
-            if diarization:
-                if turns_path.exists() and old_digest == audio_digest:
-                    turns = json.loads(turns_path.read_text())
-                else:
-                    turns = diarize(str(audio_path), config.get('meetingDiarizationModel'), progress)
-                    atomic_json(turns_path, turns)
-            else:
-                turns = []
-            timings['diarization_seconds'] = round(time.monotonic()-stage_start,3)
-            stage_start = time.monotonic()
-            segments = store.segments(meeting_id) if old_digest == audio_digest else []
-            completed_until = max(manifest.get('processed_until_seconds', 0), segments[-1]['end'] if segments else 0) if old_digest == audio_digest else 0
-            if engine is None:
+            hotwords = list(dict.fromkeys(x for x in settings.get('terms', []) + payload.get('hotwords', []) if isinstance(x, str) and len(x) <= 80))[:80]
+            def load_asr():
+                # After diarization, so the CLI never holds both models at once.
+                if engine is not None:
+                    return engine.asr
                 from mlx_audio.stt.utils import load_model
-                asr = load_model(config['asrModel'])
+                return load_model(config['asrModel'])
+            if len(tracks) == 2:
+                segments, dropped = transcribe_tracks(store, meeting_id, tracks, hotwords, diarization, config, resume, load_asr, progress, timings)
+                store.update(meeting_id, tracks=2, echo_clauses_dropped=dropped)
             else:
-                asr = engine.asr
-            with sf.SoundFile(str(audio_path)) as audio:
-                for a, b, speakers in intervals(info.duration, turns):
-                    if b <= completed_until + .001:
-                        continue
-                    audio.seek(round(a*16000))
-                    samples = audio.read(round((b-a)*16000), dtype='float32')
-                    if len(samples) >= 1600 and float(np.sqrt(np.mean(samples*samples))) >= .0015:
-                        hotwords = list(dict.fromkeys(x for x in settings.get('terms', []) + payload.get('hotwords', []) if isinstance(x, str) and len(x) <= 80))[:80]
-                        result = asr.generate(samples, language=None, hotwords=hotwords, temperature=0, repetition_penalty=1.05,
-                            max_tokens=min(1024, max(128, int((b-a)*22)+64)))
-                        mx.synchronize()
-                        text = result.text.strip()
-                        if text:
-                            row = dict(id=f's{len(segments)+1:06}', start=round(a,3), end=round(b,3), text=text,
-                                       speaker_ids=speakers, speaker_status='multiple_speakers' if len(speakers)>1 else 'model' if speakers else 'unknown', timestamp_precision='segment')
-                            row['speaker_turns'] = [dict(start=max(a,t['start']),end=min(b,t['end']),speaker=t['speaker']) for t in turns if t['start']<b and t['end']>a]
-                            row['overlap_seconds'] = round(overlap_duration(row['speaker_turns']),3)
-                            if row['overlap_seconds'] > 0: row['speaker_status'] = 'overlap'
-                            store.append_segment(meeting_id, row); segments.append(row)
+                turns_path = directory / 'speaker-turns.json'
+                if diarization:
+                    if turns_path.exists() and resume:
+                        turns = json.loads(turns_path.read_text())
+                    else:
+                        turns = diarize(str(audio_path), config.get('meetingDiarizationModel'), progress)
+                        atomic_json(turns_path, turns)
+                else:
+                    turns = []
+                timings['diarization_seconds'] = round(time.monotonic()-stage_start,3)
+                stage_start = time.monotonic()
+                segments = store.segments(meeting_id) if resume else []
+                completed_until = max(manifest.get('processed_until_seconds', 0), segments[-1]['end'] if segments else 0) if resume else 0
+                def add(row):
+                    row = {'id': f's{len(segments)+1:06}', **row}
+                    store.append_segment(meeting_id, row); segments.append(row)
+                def window(b):
                     store.update(meeting_id, stage='transcribe', processed_until_seconds=b, segment_count=len(segments))
                     progress(stage='transcribe', completed=b, total=info.duration, message=f'转写 {int(b)} / {int(info.duration)} 秒')
+                transcribe_windows(load_asr(), audio_path, info.duration, turns, hotwords, completed_until, add, window)
             store.update(meeting_id, transcript_complete=True, transcription_model=Path(config['asrModel']).name,
                          diarization_model=Path(config['meetingDiarizationModel']).name if diarization else None)
             timings['transcribe_seconds'] = round(time.monotonic()-stage_start,3)
@@ -257,8 +363,9 @@ def run_meeting(config, payload, engine=None, emit=lambda value: None):
                 source_digest = render_bundle(store, meeting_id, minutes, tree)
             timings['deep_seconds'] = round(time.monotonic()-stage_start,3)
         store.update(meeting_id, deep_status=deep_status)
-        if audio_path.exists() and not retain:
-            audio_path.unlink()
+        if not retain:
+            for path in (audio_path, directory / 'system.wav'):
+                path.unlink(missing_ok=True)
         store.update(meeting_id, status='complete', stage='complete', source_digest=source_digest,
                      warnings=minutes['warnings'], audio_retained=audio_path.exists(),
                      processing_seconds=round(time.monotonic()-started,3), timings=timings)

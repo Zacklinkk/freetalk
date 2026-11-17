@@ -188,6 +188,11 @@ enum CloudCredentialStore {
 
     static func cached(_ endpoint: String) -> CloudCredentials? { lock.lock(); defer { lock.unlock() }; return cache[endpoint] }
     static var isLoading: Bool { lock.lock(); defer { lock.unlock() }; return !loading.isEmpty }
+    #if E2E_HOOKS
+    /// The end-to-end checks hand over the key themselves: a test build would
+    /// otherwise wait on a Keychain prompt that nobody answers.
+    static func seed(_ endpoint: String, _ value: CloudCredentials) { lock.lock(); cache[endpoint] = value; lock.unlock() }
+    #endif
 
     /// Start a background read unless one is running or the value is cached.
     /// Every caller's completion runs on the main thread, including callers
@@ -210,6 +215,11 @@ enum CloudCredentialStore {
 
     /// Blocking read with the one-time merge of the old two-item layout.
     private static func read(_ endpoint: String) -> CloudCredentials? {
+        #if E2E_HOOKS
+        // The test build never reads the Keychain: macOS would ask about a binary
+        // nobody approved, possibly while nobody is at the Mac. The test seeds the key.
+        if ProcessInfo.processInfo.environment["FREETALK_E2E_SUPPORT"] != nil { return nil }
+        #endif
         guard let text = CloudEditorSettings.secret(endpoint), let (credentials, legacy) = CloudCredentials.decode(text) else { return nil }
         guard legacy else { return credentials }
         var merged = credentials

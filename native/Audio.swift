@@ -85,6 +85,9 @@ final class Recorder {
     private var samples = 0
     private var peak: Float = 0
     private var failed = false
+    private var firstHostSeconds: Double?
+    /// Host-clock seconds of this recording's first sample, to line up a second track.
+    var firstSampleTime: Double? { queue.sync { firstHostSeconds } }
     var onChunk: ((Data) -> Void)?
     var onLevel: ((Float, Double) -> Void)?
     var onError: ((String) -> Void)?
@@ -158,9 +161,9 @@ final class Recorder {
         var timings: [String: Any] = [:]
         let (audio, input, format, output, converter) = try configure(device: device, timings: &timings)
         guard valid(token) else { audio.stop(); return }
-        queue.sync { pending.removeAll(); samples = 0; peak = 0; failed = false }
+        queue.sync { pending.removeAll(); samples = 0; peak = 0; failed = false; firstHostSeconds = nil }
         var firstBuffer = true
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, when in
             // Own the tap buffer before crossing queues; AVAudioEngine reuses its storage.
             guard let self = self, self.valid(token), let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
             copy.frameLength = buffer.frameLength
@@ -191,6 +194,7 @@ final class Recorder {
                 guard count > 0 else { return }
                 if firstBuffer {
                     firstBuffer = false
+                    if when.isHostTimeValid { self.firstHostSeconds = AVAudioTime.seconds(forHostTime: when.hostTime) }
                     let elapsed = (ProcessInfo.processInfo.systemUptime-began)*1000
                     // Read timings only after start() has returned on the control queue.
                     self.control.async {

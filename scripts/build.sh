@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 project_dir="$(cd "$(dirname "$0")/.." && pwd)"
-app_dir="$project_dir/build/freetalk.app"
+app_dir="${FREETALK_APP_DIR:-$project_dir/build/freetalk.app}"
 deployment_target=14.0
 # A stable local identity keeps TCC grants across rebuilds. Ad-hoc signatures
 # change their CDHash (and macOS treats the app as new) on every build.
@@ -20,6 +20,7 @@ swiftc -swift-version 5 -O -target "arm64-apple-macos$deployment_target" \
   -framework Carbon -framework CoreAudio -framework AudioToolbox -framework NaturalLanguage -framework Security -framework WebKit \
   -framework ScreenCaptureKit -framework Vision \
   -F "$sparkle_dir" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
+  ${FREETALK_SWIFT_FLAGS:-} \
   -o "$app_dir/Contents/MacOS/freetalk"
 cp "$project_dir/native/Info.plist" "$app_dir/Contents/Info.plist"
 # The update page shows what this version changed.

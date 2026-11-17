@@ -90,8 +90,8 @@ class MeetingStore:
                 continue  # A damaged bundle never hides the others, and is not overwritten.
         return sorted(rows, key=lambda r: r['created_at'] or '', reverse=True)
 
-    def segments(self, meeting_id):
-        path = self.directory(meeting_id) / 'transcript.jsonl'
+    def segments(self, meeting_id, name='transcript.jsonl'):
+        path = self.directory(meeting_id) / name
         if not path.exists():
             return []
         rows = []
@@ -108,8 +108,9 @@ class MeetingStore:
                 rows.append(row)
         return rows
 
-    def append_segment(self, meeting_id, row):
-        path = self.directory(meeting_id) / 'transcript.jsonl'
+    def append_segment(self, meeting_id, row, name='transcript.jsonl'):
+        """Append to the transcript, or to a track's partial transcript (`name`)."""
+        path = self.directory(meeting_id) / name
         # Append one line instead of rewriting the file: an 8-hour meeting used to
         # rewrite ~0.9 GB to keep a 0.6 MB file. A crash or a concurrent reader can
         # at worst see a torn last line, which segments() skips; the next resume

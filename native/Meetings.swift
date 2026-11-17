@@ -26,8 +26,14 @@ enum MeetingKeychain {
 final class MeetingController: NSObject {
     unowned let app: AppDelegate
     let recorder = Recorder()
+    /// The sound the Mac plays, recorded as a second track when 同时录制电脑声音 is on.
+    let systemAudio = SystemAudioRecorder()
+    private var systemTrack = false, systemStarting = false
+    /// A stop that came while the second track was still starting.
+    private var afterSystemStart: (() -> Void)?
     lazy var downloads = ModelSetup(support:app.support,resources:Bundle.main.resourceURL!,catalogName:"meeting-catalog.json")
-    var settings: [String: Any] = ["enabled":false,"diarization":false,"summary_mode":"local","retain_audio":false]
+    var settings: [String: Any] = ["enabled":false,"diarization":false,"summary_mode":"local","retain_audio":false,"system_audio":false]
+    var recordsSystemAudio: Bool { settings["system_audio"] as? Bool == true }
     var onChange: (() -> Void)?
     var onComplete: ((String) -> Void)?
     private(set) var recording = false, processing = false, preparing = false
@@ -88,6 +94,11 @@ final class MeetingController: NSObject {
         let item: [String:Any] = ["schema":"freetalk.meeting.v1","id":id,"title":String(title.prefix(200)),
             "created_at":ISO8601DateFormatter().string(from:Date()),"source":source,"status":"created","audio_retained":false,"warnings":[]]
         try write(item,to:directory(id).appendingPathComponent("manifest.json")); return id
+    }
+    private func setManifest(_ id: String, _ values: [String: Any]) {
+        let url = directory(id).appendingPathComponent("manifest.json")
+        guard let data = try? Data(contentsOf:url), var item = try? JSONSerialization.jsonObject(with:data) as? [String:Any] else { return }
+        item.merge(values) { _, new in new }; try? write(item,to:url)
     }
     private func mark(_ id: String, status: String, error: String? = nil) {
         let url = directory(id).appendingPathComponent("manifest.json")
@@ -152,7 +163,9 @@ final class MeetingController: NSObject {
             recorder.start(device:device) { [weak self] result in
                 guard let self = self, self.request == token else { return }; self.startupTimeout?.invalidate()
                 switch result {
-                case .success: self.preparing = false; self.recording = true; self.mark(id,status:"recording"); self.app.refreshUI(); self.onChange?()
+                case .success:
+                    self.preparing = false; self.recording = true; self.mark(id,status:"recording"); self.app.refreshUI(); self.onChange?()
+                    if self.recordsSystemAudio { self.startSystemAudio(id, token: token) }
                 case .failure(let error): self.recordingHUD.hide(); self.preparing = false; self.writer?.close(); self.writer = nil; self.mark(id,status:"failed",error:error.localizedDescription); self.showError(error); self.app.refreshUI()
                 }
             }
@@ -163,13 +176,50 @@ final class MeetingController: NSObject {
         recordingHUD.finishMeeting(process ? "正在生成本地会议资料" : "已暂停，可在会议资料中继续处理")
         recording = false; preparing = false; processing = true; startupTimeout?.invalidate()
         recorder.onLevel = nil; recorder.onError = nil
+        let micStart = recorder.firstSampleTime
         recorder.stop { [weak self] seconds,_ in
             guard let self = self else { return }; self.writer?.close(); self.writer = nil; self.recorder.onChunk = nil
-            self.processing = false; self.recordingDeviceUID = nil
-            if process && seconds >= 0.5 { self.process(id,audio:self.directory(id).appendingPathComponent("audio.wav")) }
-            else { self.mark(id,status:"interrupted",error:"录音已保存，可在列表选择后继续处理"); self.message = "录音已停止并保留，可稍后继续处理。"; self.onComplete?(id); self.onChange?(); self.app.refreshUI() }
+            self.stopSystemAudio(id, micStart: micStart, micSeconds: seconds) {
+                self.processing = false; self.recordingDeviceUID = nil
+                if process && seconds >= 0.5 { self.process(id,audio:self.directory(id).appendingPathComponent("audio.wav")) }
+                else { self.mark(id,status:"interrupted",error:"录音已保存，可在列表选择后继续处理"); self.message = "录音已停止并保留，可稍后继续处理。"; self.onComplete?(id); self.onChange?(); self.app.refreshUI() }
+            }
         }
         message = "正在保存录音…"; onChange?(); app.refreshUI()
+    }
+    /// The second track. Without the Screen Recording permission the meeting
+    /// continues with the microphone only, and says so.
+    private func startSystemAudio(_ id: String, token: UUID) {
+        guard WindowText.permitted else {
+            WindowText.requestPermission()
+            message = "没有“屏幕录制”权限，本次只录麦克风。授权后，下一次会议会同时录制电脑声音。"; onChange?(); return
+        }
+        systemAudio.onError = { [weak self] error in
+            guard let self = self, self.request == token, self.recording else { return }
+            self.message = "电脑声音的录制已停止（\(error)），麦克风继续录音。"; self.onChange?()
+        }
+        systemStarting = true
+        systemAudio.start(writingTo: directory(id).appendingPathComponent("system.wav")) { [weak self] error in
+            guard let self = self else { return }
+            self.systemStarting = false
+            if let error = error { self.message = "无法录制电脑声音（\(error.localizedDescription)），本次只录麦克风。"; self.onChange?() }
+            else { self.systemTrack = true }
+            // The meeting ended while the stream was starting: stop it now, before processing reads the file.
+            if let next = self.afterSystemStart { self.afterSystemStart = nil; next() }
+        }
+    }
+    private func stopSystemAudio(_ id: String, micStart: Double?, micSeconds: Double, then next: @escaping () -> Void) {
+        if systemStarting { afterSystemStart = { [weak self] in self?.stopSystemAudio(id, micStart: micStart, micSeconds: micSeconds, then: next) }; return }
+        guard systemTrack else { next(); return }
+        systemTrack = false
+        let systemStart = systemAudio.firstSampleTime
+        systemAudio.stop { [weak self] in
+            guard let self = self else { return }
+            // Where the second track starts on the microphone's clock: its first
+            // sound, which can come minutes in (the Mac plays nothing until then).
+            if let mic = micStart, let system = systemStart { self.setManifest(id, ["system_offset_seconds": max(-10, min(micSeconds, system - mic)), "tracks": 2]) }
+            next()
+        }
     }
     func process(_ id: String, audio: URL? = nil) {
         activeID = id; request = UUID(); let token = request

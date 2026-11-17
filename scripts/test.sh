@@ -38,3 +38,6 @@ native_test DictationLimitTests native/DictationLimit.swift
 native_test MeetingAudioTests native/MeetingAudio.swift native/Audio.swift
 sparkle_dir="$(bash scripts/prepare-sparkle.sh)"
 native_test UpdaterTests native/AppUpdater.swift -F "$sparkle_dir" -framework Sparkle -Xlinker -rpath -Xlinker "$sparkle_dir"
+# The end-to-end test build (scripts/build-e2e.sh) must keep compiling.
+swiftc -swift-version 5 -typecheck -D E2E_HOOKS -target "$(uname -m)-apple-macos14.0" native/*.swift -F "$sparkle_dir"
+printf '%s\n' 'E2E test build typechecks'

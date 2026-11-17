@@ -73,7 +73,7 @@ final class NightlyMaintenance: NSObject {
         run(s, credentials: credentials, force: false)
     }
 
-    @objc private func runNow() {
+    @objc func runNow() {
         let cloud = CloudEditorSettings.load()
         reading = true; refresh(); reportLabel.stringValue = "正在读取钥匙串中的密钥…（如果 macOS 询问，请选择“始终允许”）"
         CloudCredentialStore.prefetch(cloud.baseURL) { [weak self] credentials in
