@@ -107,8 +107,8 @@ extension AppDelegate {
         permissionsLabel = label("",size:11,color:.secondaryLabelColor)
         let permissionCard = card("系统权限与输入兼容性", views: [permissionsLabel,row([button("逐项授权引导",#selector(showPermissionGuide)),button("麦克风",#selector(requestMic)),button("辅助功能",#selector(requestAX)),button("输入监控",#selector(requestKeys))]),button("5秒后测试输入",#selector(testInsertion)),label("切回目标输入框，将插入“freetalk 输入测试”，不会发送。",size:12,color:.secondaryLabelColor)])
         // Everyday settings stay visible; the rest waits behind one disclosure row.
-        let advanced = DisclosureSection(title: "专业配置", subtitle: "录音时长、排版与上下文、整理提示词、云端模型、系统权限", key: "voiceAdvancedExpanded",
-                                         views: [limitCard,detailCard,promptEditor.makeCard(),cloudEditor.makeCard(),permissionCard])
+        let advanced = DisclosureSection(title: "专业配置", subtitle: "录音时长、排版与上下文、按应用语气、整理提示词、云端模型、系统权限", key: "voiceAdvancedExpanded",
+                                         views: [limitCard,detailCard,makeToneCard(),promptEditor.makeCard(),cloudEditor.makeCard(),permissionCard])
         // A missing permission needs the buttons in there; open it for this session only.
         if VoicePermissions.current(shortcutActive:hotkey.active, shortcutFailure:hotkey.failure).needsGuidance { advanced.reveal() }
         addSettingsPage(settingsPage("语音输入", subtitle: "说完即写入当前光标位置，保持你的表达。", cards:[statusCard,micCard,shortcutCard,cleanupCard,advanced],scrollable:true))
@@ -132,9 +132,9 @@ extension AppDelegate {
         learningButton.state = UserDefaults.standard.object(forKey:"learnCorrections") as? Bool == false ? .off : .on
         addSettingsPage(settingsPage("常用词与学习",subtitle:"让名字、缩写和项目术语保持正确的拼写。",cards:[
             card("个人词库","每行一个词，保存你常用的写法。下一次录音起生效。",views:[button("管理常用词…",#selector(showVocabulary))]),
-            card("从改字学习","输入后 90 秒内在同一输入框里改字，可靠的短词修正会自动学习，并显示5秒撤销提示。",views:[learningButton,button("管理已学会的词…",#selector(showCorrections)),learningStatusLabel()]),
+            card("从改字学习","输入后在同一输入框里改字：改正的词、删掉的口水词和调整的标点都会学习，并显示5秒撤销提示。至少观察 90 秒，每次改字后再等 30 秒，最长 10 分钟。",views:[learningButton,button("管理已学会的词和习惯…",#selector(showCorrections)),learningStatusLabel()]),
             DisclosureSection(title:"专业配置",subtitle:"学习规则、整理规则优化",key:"learningAdvancedExpanded",views:[
-                card("学习规则",views:[label("会区分是识别听错还是整理改错：识别听错的词用于语音识别和辨词；整理改错的地方会记下来，供下面的「整理规则优化」使用。标点、数量、否定和整段改写不学习；中文学读音相同或只差一个字母的改字（z/zh、c/ch、n/l、an/ang 这类口音差别），正确写法自动加入词库。重复出现会加强，长期未再出现会自动失效。\n专业词（例如星河知识库、项目名称、SFT）在语音识别和文字整理时都会作为辨词参考。",size:12,color:.secondaryLabelColor)]),
+                card("学习规则",views:[label("会区分是识别听错还是整理改错：识别听错的词用于语音识别和辨词；整理改错的地方会记下来，供下面的「整理规则优化」使用。数量、否定和整段改写不学习。删掉整理留下的口水词（就是、然后、那个，）、补回被删的语气词、去掉或补上句末句号、在连接词前加逗号、中英文之间加空格，会记成整理习惯：删除和改动类的习惯出现两次后生效，补回的词立即保留；语气词和句号按应用类别分别记录。中文学读音相同或只差一个字母的改字（z/zh、c/ch、n/l、an/ang 这类口音差别），正确写法自动加入词库。重复出现会加强，长期未再出现会自动失效。\n专业词（例如星河知识库、项目名称、SFT）在语音识别和文字整理时都会作为辨词参考。",size:12,color:.secondaryLabelColor)]),
                 promptTuning.makeCard()])],scrollable:true))
 
         modelLabel = label(modelText,color:.secondaryLabelColor)
@@ -148,6 +148,28 @@ extension AppDelegate {
         sidebarButtons[0].state = .on; settingsTabs.selectTabViewItem(at:0); refreshUI()
     }
     private func addSettingsPage(_ page: NSView) { let item = NSTabViewItem(); item.view = page; settingsTabs.addTabViewItem(item) }
+    /// One tone per kind of app, two kinds to a row.
+    func makeToneCard() -> NSView {
+        var rows: [[NSView]] = [], current: [NSView] = []
+        for category in AppCategory.toneChoices {
+            let picker = NSPopUpButton(); picker.addItems(withTitles: DictationTone.allCases.map(\.title))
+            picker.selectItem(at: DictationTone.allCases.firstIndex(of: DictationTone.chosen(for: category)) ?? 0)
+            picker.identifier = NSUserInterfaceItemIdentifier(category.rawValue); picker.target = self; picker.action = #selector(toneChanged(_:))
+            picker.setAccessibilityLabel("\(category.title)的语气")
+            current += [NSTextField(labelWithString: category.title), picker]
+            if current.count == 4 { rows.append(current); current = [] }
+        }
+        if !current.isEmpty { rows.append(current + [NSGridCell.emptyContentView, NSGridCell.emptyContentView]) }
+        let grid = NSGridView(views: rows); grid.rowSpacing = 10; grid.columnSpacing = 12
+        for index in [0, 2] { grid.column(at: index).xPlacement = .trailing }
+        for index in 0..<grid.numberOfRows { grid.row(at: index).yPlacement = .center }
+        return card("按应用调整语气", "自然：按现在的方式整理。正式：去掉句末的呀、啦、哈、呗，结尾补句号。口语：保留语气词，一句话的消息不加句号。", views: [grid,
+            label("常用应用和网站已按类别内置：浏览器按网页域名区分，未收录的应用按名称判断。没有列出的类别（代码编辑器、终端、表格、会议等）始终按自然整理。你改字时学到的习惯优先于这里的选择。", size: 12, color: .secondaryLabelColor)])
+    }
+    @objc func toneChanged(_ sender: NSPopUpButton) {
+        guard let id = sender.identifier?.rawValue, let category = AppCategory(rawValue: id), DictationTone.allCases.indices.contains(sender.indexOfSelectedItem) else { return }
+        DictationTone.save(DictationTone.allCases[sender.indexOfSelectedItem], for: category)
+    }
     @objc func windowContextChanged(_ sender: NSButton) { UserDefaults.standard.set(sender.state == .on,forKey:"windowContextEnabled") }
     @objc func selectSettingsPage(_ button: NSButton) {
         settingsTabs.selectTabViewItem(at:button.tag)

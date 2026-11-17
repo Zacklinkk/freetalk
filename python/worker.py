@@ -119,16 +119,26 @@ def check_prompt(engine, command, emit):
             "regressions": regressions(before, after), "fixed": fixed, "worse": worse(before, after)}
 
 
+def style_context(store, context):
+    """Add the active habits for this app's kind to the dictation context."""
+    from style_learning import kept_words
+    scope = context.get('category') or context.get('scene') or 'general'
+    lessons = store.active(scope) if store else []
+    return {**context, 'style': [l for l in lessons if l['kind'] != 'keep'], 'keep_words': kept_words(lessons)}
+
+
 def main():
     config = json.loads(sys.stdin.readline())
     engine = Engine(config, emit)
+    from style_learning import StyleStore
+    styles = StyleStore(config['supportPath']) if config.get('supportPath') else None
     emit({"event": "ready"})
     for line in sys.stdin:
         command = json.loads(line)
         try:
             action = command["action"]
             if action == "begin":
-                engine.reset(normalize_context(command.get("context", {})))
+                engine.reset(style_context(styles, normalize_context(command.get("context", {}))))
                 policy = command.get("cleanup_policy", "auto")
                 engine.cleanup_policy = policy if policy in {"auto", "always", "fast"} else "auto"
                 engine.configure_cloud(command.get("cloud"))
@@ -152,6 +162,21 @@ def main():
                 from context import add_visible_text
                 engine.context = add_visible_text(engine.context, command.get("nearby", ""))
                 result = {"ready": True}
+            elif action == "learn_style":
+                # The user edited the inserted text; learn the habits it shows.
+                if styles is None:
+                    raise ValueError("No support directory")
+                result = {"lessons": styles.learn(str(command.get("session", "")), str(command.get("raw", ""))[:4000],
+                                                  str(command.get("inserted", ""))[:4000], str(command.get("current", ""))[:4000],
+                                                  str(command.get("scope") or "general")[:40])}
+            elif action == "undo_style":
+                result = {"undone": bool(styles and styles.undo(str(command.get("session", ""))))}
+            elif action == "style_list":
+                result = {"lessons": styles.listing() if styles else []}
+            elif action == "style_remove":
+                if styles:
+                    styles.remove(str(command.get("lesson", "")))
+                result = {"removed": True}
             elif action == "chunk":
                 result = engine.push(base64.b64decode(command["pcm"], validate=True))
             elif action == "finish":

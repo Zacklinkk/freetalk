@@ -210,6 +210,20 @@ final class CorrectionStore {
     }
 }
 
+/// How long the learner keeps watching the field after a paste: at least
+/// `base` seconds, and `quiet` seconds after the last edit, up to `cap`.
+struct LearningWindow {
+    static let base: TimeInterval = 90, quiet: TimeInterval = 30, cap: TimeInterval = 600
+    /// Why watching ends now, or nil to keep watching.
+    static func endReason(began: Date, lastEdit: Date?, now: Date = Date()) -> String? {
+        let elapsed = now.timeIntervalSince(began)
+        if elapsed >= cap { return "已观察 10 分钟" }
+        guard elapsed >= base else { return nil }
+        guard let lastEdit = lastEdit else { return "90 秒内没有改字" }
+        return now.timeIntervalSince(lastEdit) >= quiet ? "改字后 30 秒没有新的修改" : nil
+    }
+}
+
 final class CorrectionLearner {
     private var timer: Timer?
     var onLearn: ((LearnedCorrection, CGRect?) -> Void)?
@@ -218,6 +232,10 @@ final class CorrectionLearner {
     /// inserted, so cleanup mistakes can be collected for prompt tuning.
     var onFinish: ((_ raw: String, _ inserted: String, _ final: String) -> Void)?
     var onCleanupEdit: (() -> Void)?
+    /// The inserted text and what the field shows now, each time the user's
+    /// edit settles. Fillers deleted and punctuation changed teach habits.
+    var onEdit: ((_ session: String, _ raw: String, _ inserted: String, _ current: String, InputSnapshot) -> Void)?
+    private(set) var sessionID = ""
     private var session: (raw: String, inserted: String, final: String?)?
     func stop() {
         timer?.invalidate(); timer = nil
@@ -237,13 +255,14 @@ final class CorrectionLearner {
         let prefix = plain((target.value as NSString).substring(to:target.range.location))
         let suffix = plain((target.value as NSString).substring(from:target.range.location+target.range.length))
         let inserted = plain(inserted)
-        var baseline = inserted, stableValue = "", stableSince = Date(), savedValue = ""
+        var baseline = inserted, stableValue = "", stableSince = Date(), savedValue = "", lastSeen = inserted
         var observedPairs = Set<String>()
-        let began = Date()
-        lastStop = ""; session = (raw, inserted, nil)
+        let began = Date(); var lastEdit: Date?
+        lastStop = ""; session = (raw, inserted, nil); sessionID = UUID().uuidString
+        let id = sessionID
         timer = Timer.scheduledTimer(withTimeInterval:0.6,repeats:true) { [weak self] _ in
             guard let self = self else { return }
-            if Date().timeIntervalSince(began) > 90 { self.end("90 秒内没有改字"); return }
+            if let reason = LearningWindow.endReason(began: began, lastEdit: lastEdit) { self.end(reason); return }
             if IsSecureEventInputEnabled() { self.end("进入安全输入"); return }
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else { self.end("切换到了其他应用"); return }
             guard let focused = focusedElement(target.pid),
@@ -256,10 +275,13 @@ final class CorrectionLearner {
             guard value.hasPrefix(prefix), value.hasSuffix(suffix), value.count >= prefix.count+suffix.count else { self.end(value.isEmpty ? "内容已发送或清空" : "插入位置之外的文字被改动"); return }
             let edited = String(value.dropFirst(prefix.count).dropLast(suffix.count))
             self.session?.final = edited == inserted ? nil : edited
+            // Every change, even one taken back, keeps the window open.
+            if edited != lastSeen { lastSeen = edited; lastEdit = Date() }
             if edited == baseline { return }
             if edited != stableValue { stableValue = edited; stableSince = Date(); return }
             guard Date().timeIntervalSince(stableSince) >= 1.5, savedValue != edited else { return }
             savedValue = edited
+            self.onEdit?(id, raw, inserted, edited, target)
             if let pair = CorrectionExtractor.propose(before:baseline,after:edited,terms:(try? store.vocabulary.load()) ?? []) {
                 let key=pair.0+"\u{0}"+pair.1
                 if observedPairs.insert(key).inserted {
@@ -281,33 +303,61 @@ final class CorrectionLearner {
 final class CorrectionsWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     let store: CorrectionStore, window: NSWindow
     let table = NSTableView(), heard = NSTextField(), term = NSTextField(), info = NSTextField(wrappingLabelWithString:"")
-    let mode = NSSegmentedControl(labels:["待确认","已收录"],trackingMode:.selectOne,target:nil,action:nil)
+    let mode = NSSegmentedControl(labels:["待确认","已收录","整理习惯"],trackingMode:.selectOne,target:nil,action:nil)
     var rows: [CorrectionSuggestion] = []
+    /// Cleanup habits come from the worker, which owns their file: rows of id, text and status.
+    var listStyles: ((@escaping ([[String: Any]]?) -> Void) -> Void)?
+    var removeStyle: ((String, @escaping (Bool) -> Void) -> Void)?
+    private var habits: Bool { mode.selectedSegment == 2 }
+    private let accept = NSButton(title:"确认并加入词库",target:nil,action:nil)
     init(store: CorrectionStore) {
         self.store = store; window = NSWindow(contentRect:NSRect(x:0,y:0,width:680,height:470),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
         super.init(); window.title = "freetalk · 已学会的纠正"; window.isReleasedWhenClosed = false; window.center()
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 16; stack.translatesAutoresizingMaskIntoConstraints = false; window.contentView!.addSubview(stack)
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo:window.contentView!.leadingAnchor,constant:22),stack.trailingAnchor.constraint(equalTo:window.contentView!.trailingAnchor,constant:-22),stack.topAnchor.constraint(equalTo:window.contentView!.topAnchor,constant:22),stack.bottomAnchor.constraint(equalTo:window.contentView!.bottomAnchor,constant:-22)])
-        stack.addArrangedSubview(NSTextField(wrappingLabelWithString:"自动学会的纠正会用于下次录音，可在这里移除或手动补充。旧版建议仍可切到待确认页处理。"))
+        stack.addArrangedSubview(NSTextField(wrappingLabelWithString:"自动学会的纠正会用于下次录音，可在这里移除或手动补充。旧版建议仍可切到待确认页处理。整理习惯来自你删掉的口水词和调整的标点。"))
         mode.selectedSegment = 1; mode.target = self; mode.action = #selector(modeChanged); stack.addArrangedSubview(mode)
         for (key,title) in [("heard","识别成"),("term","改为")] { let col = NSTableColumn(identifier:NSUserInterfaceItemIdentifier(key)); col.title = title; col.width = 295; table.addTableColumn(col) }
         table.dataSource = self; table.delegate = self; table.rowHeight = 30; table.setAccessibilityLabel("改字建议列表")
         let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder; stack.addArrangedSubview(scroll); scroll.widthAnchor.constraint(equalTo:stack.widthAnchor).isActive = true; scroll.heightAnchor.constraint(equalToConstant:200).isActive = true
         heard.placeholderString = "识别成的词"; term.placeholderString = "正确的词"; heard.setAccessibilityLabel("识别成"); term.setAccessibilityLabel("应当是")
         let fields = NSStackView(views:[heard,term]); fields.spacing = 12; fields.distribution = .fillEqually; stack.addArrangedSubview(fields); fields.widthAnchor.constraint(equalTo:stack.widthAnchor).isActive = true
-        let accept = NSButton(title:"确认并加入词库",target:self,action:#selector(accept)), ignore = NSButton(title:"移除所选记录",target:self,action:#selector(ignore))
+        accept.target = self; accept.action = #selector(acceptPair); let ignore = NSButton(title:"移除所选记录",target:self,action:#selector(ignore))
         accept.bezelStyle = .rounded; ignore.bezelStyle = .rounded; let actions = NSStackView(views:[accept,ignore]); actions.spacing = 12; stack.addArrangedSubview(actions)
         info.textColor = .secondaryLabelColor; info.font = .systemFont(ofSize:12); stack.addArrangedSubview(info)
     }
     func show() { refresh(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) }
-    func refresh() { do {
-        rows = mode.selectedSegment == 0 ? try store.pending() : try store.aliases().map { CorrectionSuggestion(id:$0.heard,heard:$0.heard,term:$0.term,createdAt:Date()) }
-        table.reloadData(); info.stringValue = "\(rows.count) 条\(mode.selectedSegment == 0 ? "待确认建议" : "纠正关系") · 仅在本机保存"
-    } catch { info.stringValue = "读取失败，原文件已保留：\(error.localizedDescription)" } }
+    func refresh() {
+        table.tableColumns[0].title = habits ? "习惯" : "识别成"; table.tableColumns[1].title = habits ? "状态" : "改为"
+        for view in [heard, term, accept] as [NSControl] { view.isEnabled = !habits }
+        if habits { refreshHabits(); return }
+        do {
+            rows = mode.selectedSegment == 0 ? try store.pending() : try store.aliases().map { CorrectionSuggestion(id:$0.heard,heard:$0.heard,term:$0.term,createdAt:Date()) }
+            table.reloadData(); info.stringValue = "\(rows.count) 条\(mode.selectedSegment == 0 ? "待确认建议" : "纠正关系") · 仅在本机保存"
+        } catch { info.stringValue = "读取失败，原文件已保留：\(error.localizedDescription)" }
+    }
+    private func refreshHabits() {
+        rows = []; table.reloadData()
+        guard let list = listStyles else { return }
+        list { [weak self] lessons in
+            guard let self = self, self.habits else { return }
+            guard let lessons = lessons else { self.info.stringValue = "本地模型加载完成后才能读取整理习惯"; return }
+            self.rows = lessons.map { CorrectionSuggestion(id:$0["id"] as? String ?? "",heard:$0["text"] as? String ?? "",term:$0["status"] as? String ?? "",createdAt:Date()) }
+            self.table.reloadData(); self.info.stringValue = "\(self.rows.count) 个整理习惯 · 删除和改动类的习惯出现两次后生效 · 仅在本机保存"
+        }
+    }
     @objc func modeChanged() { refresh() }
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? { NSTextField(labelWithString:tableColumn?.identifier.rawValue == "heard" ? rows[row].heard : rows[row].term) }
-    func tableViewSelectionDidChange(_ notification: Notification) { guard rows.indices.contains(table.selectedRow) else { return }; let row = rows[table.selectedRow]; heard.stringValue = row.heard; term.stringValue = row.term }
-    @objc func accept() { do { let id = mode.selectedSegment == 0 && rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil; try store.accept(heard:heard.stringValue,term:term.stringValue,id:id); refresh(); info.stringValue = "已加入词库，下一次录音生效" } catch { info.stringValue = error.localizedDescription } }
-    @objc func ignore() { guard rows.indices.contains(table.selectedRow) else { return }; do { if mode.selectedSegment == 0 { try store.dismiss(rows[table.selectedRow].id) } else { try store.removeAlias(rows[table.selectedRow].heard) }; refresh() } catch { info.stringValue = error.localizedDescription } }
+    func tableViewSelectionDidChange(_ notification: Notification) { guard !habits, rows.indices.contains(table.selectedRow) else { return }; let row = rows[table.selectedRow]; heard.stringValue = row.heard; term.stringValue = row.term }
+    @objc func acceptPair() { do { let id = mode.selectedSegment == 0 && rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil; try store.accept(heard:heard.stringValue,term:term.stringValue,id:id); refresh(); info.stringValue = "已加入词库，下一次录音生效" } catch { info.stringValue = error.localizedDescription } }
+    @objc func ignore() {
+        guard rows.indices.contains(table.selectedRow) else { return }
+        if habits {
+            removeStyle?(rows[table.selectedRow].id) { [weak self] removed in
+                if removed { self?.refresh() } else { self?.info.stringValue = "本地模型加载完成后才能移除整理习惯" }
+            }
+            return
+        }
+        do { if mode.selectedSegment == 0 { try store.dismiss(rows[table.selectedRow].id) } else { try store.removeAlias(rows[table.selectedRow].heard) }; refresh() } catch { info.stringValue = error.localizedDescription } }
 }

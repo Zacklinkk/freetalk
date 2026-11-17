@@ -7,7 +7,8 @@ import re
 from edits import core, protected_span, contextual_cleanup, replace_spans
 
 
-def candidates(raw, scene=''):
+def candidates(raw, scene='', keep=()):
+    """Filler words the model may choose to drop. `keep` are words the user put back before."""
     rows = []
     pattern = r'对[呀啊]?[，,。]\s*然后[，,]?\s*|就是说[哦啊][，,]?\s*|然后|就是|那个|这个|对呀|对啊|[嗯呃哦啊呀][，,]?\s*'
     for m in re.finditer(pattern,raw):
@@ -20,6 +21,7 @@ def candidates(raw, scene=''):
             if scene == 'conversation': continue
             old = old[0]; b = a+1
         if scene == 'conversation' and old in {'对呀', '对啊'}: continue
+        if core(old) in keep: continue
         # Sequential 然后 is refused by contextual_cleanup (see sequential_then).
         if protected_span(raw,a,b) or not contextual_cleanup(raw,old,new,a,'filler',scene):continue
         before,after=raw[max(0,a-40):a],raw[b:b+50]
