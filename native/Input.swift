@@ -718,6 +718,24 @@ enum InsertionCheck {
         return true
     }
 
+    private static let lineNumber = try! NSRegularExpression(pattern: "^\\s*\\d{1,3}[.)]?\\s+")
+
+    /// True when `observed` is `inserted` as a rich editor renders it. The
+    /// editor draws list numbers itself (none in its text, or its own "1"
+    /// between tabs) and puts each block on its own line, so the number that
+    /// starts a line and all white space are left out of the comparison.
+    static func rendering(_ observed: String, matches inserted: String) -> Bool {
+        func content(_ text: String) -> String {
+            normalize(text).components(separatedBy: "\n").map { line -> String in
+                let number = lineNumber.rangeOfFirstMatch(in: line, range: NSRange(line.startIndex..., in: line))
+                let rest = Range(number, in: line).map { String(line[$0.upperBound...]) } ?? line
+                return rest.filter { !$0.isWhitespace }
+            }.joined()
+        }
+        let shown = content(observed)
+        return !shown.isEmpty && shown == content(inserted)
+    }
+
     /// Whether the caret is where the user left it: the same selected text and
     /// the same `context` UTF-16 units before and after it. Changes elsewhere in
     /// the field do not count. Invisible-character differences are ignored.

@@ -18,6 +18,17 @@ import AppKit
         precondition(InsertionCheck.showsLines(["要做：", "补齐单测", "更新文档"], in: "旧内容要做：\n补齐单测\n更新文档", before: "旧内容"))
         precondition(!InsertionCheck.showsLines(["要做：", "补齐单测", "更新文档"], in: "旧内容要做：\n更新文档", before: "旧内容"))
         precondition(!InsertionCheck.showsLines(["补齐单测"], in: "补齐单测", before: "补齐单测"))
+        // What a rich editor shows for a pasted list is still the same text: a web editor leaves the
+        // numbers out of its text, an AppKit text view writes its own between tabs (as NSTextView does).
+        let dictated = "这次要做三件事：\n1. 补齐单测\n2. 修掉内存泄漏\n3. 更新文档"
+        let web = "这次要做三件事：\n补齐单测\n修掉内存泄漏\n更新文档\n", appKit = "这次要做三件事：\n\t1\t补齐单测\n\t2\t修掉内存泄漏\n\t3\t更新文档\n"
+        for shown in [dictated, web, appKit, "\n" + web] { precondition(InsertionCheck.rendering(shown, matches: dictated), shown) }
+        precondition(InsertionCheck.rendering("\t1\t用缓存\n\t2\t收尾\n", matches: "4. 用缓存\n5. 收尾"))
+        precondition(InsertionCheck.rendering("第一段。\n第二段。\n", matches: "第一段。\n\n第二段。"))
+        // An edit is not a rendering: a changed word, a removed item, a removed mark, an emptied field.
+        for edited in ["这次要做三件事：\n补齐单测\n修掉内存泄露\n更新文档", "这次要做三件事：\n补齐单测\n更新文档", "这次要做三件事\n补齐单测\n修掉内存泄漏\n更新文档", ""] {
+            precondition(!InsertionCheck.rendering(edited, matches: dictated), edited)
+        }
 
         // Window text recognition reads Chinese and English from an image.
         let size = NSSize(width: 520, height: 120)

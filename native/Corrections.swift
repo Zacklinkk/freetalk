@@ -246,7 +246,14 @@ final class CorrectionLearner {
     private(set) var lastStop = ""
     var onStop: ((String) -> Void)?
     private func end(_ reason: String) { lastStop = reason; stop(); onStop?(reason) }
-    func start(target: InputSnapshot, inserted: String, raw: String, store: CorrectionStore) {
+    /// What the field shows for a rich paste of `inserted`, when it differs only
+    /// in how the editor draws the list and its blocks; nil when the field
+    /// shows the text as pasted, or something else.
+    static func renderedStart(inserted: String, observed: String) -> String? {
+        observed != inserted && InsertionCheck.rendering(observed, matches: inserted) ? observed : nil
+    }
+    /// `rich` says the paste offered HTML next to the plain text (see RichText).
+    func start(target: InputSnapshot, inserted: String, raw: String, rich: Bool = false, store: CorrectionStore) {
         stop()
         // Web editors report the same text with different invisible characters
         // than they accepted (NBSP, zero-width space, CRLF); compare a normal form.
@@ -254,8 +261,9 @@ final class CorrectionLearner {
         func plain(_ text: String) -> String { InsertionCheck.normalize(text, trimEnd: false) }
         let prefix = plain((target.value as NSString).substring(to:target.range.location))
         let suffix = plain((target.value as NSString).substring(from:target.range.location+target.range.length))
-        let inserted = plain(inserted)
+        var inserted = plain(inserted)
         var baseline = inserted, stableValue = "", stableSince = Date(), savedValue = "", lastSeen = inserted
+        var settled = !rich
         var observedPairs = Set<String>()
         let began = Date(); var lastEdit: Date?
         lastStop = ""; session = (raw, inserted, nil); sessionID = UUID().uuidString
@@ -286,6 +294,15 @@ final class CorrectionLearner {
             if edited.isEmpty {
                 if lastSeen.count * 2 < inserted.count { self.session?.final = nil; lastSeen = savedValue }
                 finish("内容已发送或清空"); return
+            }
+            // A rich editor shows a pasted list its own way: no "1. " in its
+            // text, or its own numbers and tabs. That is where the text
+            // starts; only what the user changes afterwards is an edit.
+            if !settled {
+                settled = true
+                if let shown = CorrectionLearner.renderedStart(inserted: inserted, observed: edited) {
+                    inserted = shown; baseline = shown; lastSeen = shown; self.session?.inserted = shown
+                }
             }
             self.session?.final = edited == inserted ? nil : edited
             // Every change, even one taken back, keeps the window open.
