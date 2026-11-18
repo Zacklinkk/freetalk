@@ -1,9 +1,9 @@
 import AppKit
 
 /// Structured dictation as HTML, so apps that paste rich text show a real
-/// list (1. 2. 3.) or paragraphs. Plain-text fields keep using the plain
-/// string on the same pasteboard item; terminals and code editors only ever
-/// get the plain string.
+/// list (1. 2. 3.) or paragraphs. The plain string is on the same pasteboard
+/// item: plain-text fields, terminals and code editors read that one and
+/// never look at the HTML.
 enum RichText {
     private static let numbered = try! NSRegularExpression(pattern: "^(\\d{1,3})\\. (.*)$")
 

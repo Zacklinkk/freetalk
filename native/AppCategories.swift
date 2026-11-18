@@ -43,9 +43,6 @@ enum AppCategory: String, CaseIterable {
         }
     }
 
-    /// Plain text only: a terminal, an editor or a prompt box would show HTML list markup as text.
-    var plainTextOnly: Bool { [.terminal, .code_editor, .ai_chat].contains(self) }
-
     /// The categories listed in Settings for choosing a tone.
     static let toneChoices: [AppCategory] = [.chat, .work_chat, .email, .document, .notes, .ai_chat, .social, .task, .browser, .other]
 

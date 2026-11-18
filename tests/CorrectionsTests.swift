@@ -70,6 +70,13 @@ import Foundation
         let devices = MicDevices.all(), current = MicDevices.selected(uid:nil,devices:devices)
         precondition(current == nil || current!.id == MicDevices.defaultInputID())
         precondition(MicDevices.selected(uid:"missing-test-device",devices:devices) == nil)
+        // After a rich paste the learner starts from what the editor shows, so the editor's own list
+        // numbers are not taken for an edit. Text shown as pasted, or already changed, starts as pasted.
+        let list = "要做两件事：\n1. 补齐单测\n2. 更新文档", shown = "要做两件事：\n\t1\t补齐单测\n\t2\t更新文档\n"
+        precondition(CorrectionLearner.renderedStart(inserted: list, observed: shown) == shown)
+        precondition(CorrectionLearner.renderedStart(inserted: list, observed: "要做两件事：\n补齐单测\n更新文档") == "要做两件事：\n补齐单测\n更新文档")
+        precondition(CorrectionLearner.renderedStart(inserted: list, observed: list) == nil)
+        precondition(CorrectionLearner.renderedStart(inserted: list, observed: "要做两件事：\n补齐单测") == nil)
         // The learner watches 90 s at least, 30 s after each edit, 10 minutes at most.
         let began = Date(timeIntervalSince1970: 1_800_000_000)
         func end(_ elapsed: TimeInterval, lastEdit: TimeInterval?) -> String? {

@@ -33,9 +33,8 @@ import Foundation
         }
         precondition(AppCategory.of(bundle: "com.apple.Safari", url: "https://mail.qq.com/") == .email)
         precondition(AppCategory.apps.count >= 150 && AppCategory.pages.count >= 90)
-        // Every kind in the table has a title, and Settings offers no plain-text kind a tone.
+        // Every kind in the table has a title.
         precondition(AppCategory.allCases.allSatisfy { !$0.title.isEmpty })
-        precondition(AppCategory.terminal.plainTextOnly && AppCategory.ai_chat.plainTextOnly && !AppCategory.email.plainTextOnly)
 
         let suite = "freetalk-tone-tests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

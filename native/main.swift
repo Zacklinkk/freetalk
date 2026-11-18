@@ -782,7 +782,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         self.phase = .idle; self.hudTimer?.invalidate(); self.hud.finish(success: false, message: "未识别到文字"); self.setStatus("未识别到文字；请检查麦克风或稍后重试"); return
                     }
                     self.processingStage = "正在输入…"; self.setStatus(self.processingStage)
-                    self.inserter.insert(self.lastText, into: self.target, html: self.richHTML(self.lastText)) { success, message in
+                    let html = self.richHTML(self.lastText)
+                    self.inserter.insert(self.lastText, into: self.target, html: html) { success, message in
                         guard self.session == token else { return }
                         self.phase = .idle; self.hudTimer?.invalidate()
                         self.currentEntry?.insertionStatus = message; self.currentEntry?.insertionCheck = self.inserter.lastCheck; self.saveResult()
@@ -802,7 +803,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         } else if self.learningButton.state == .on, let target = self.target, success || message.hasPrefix("粘贴已发送") {
                             self.learningEntryID = self.currentEntry?.id
                             self.annotateHistory(self.learningEntryID) { $0.learned = [] }
-                            self.correctionLearner.start(target:self.inserter.lastTarget ?? target,inserted:self.lastText,raw:self.lastRaw,store:self.correctionStore)
+                            self.correctionLearner.start(target:self.inserter.lastTarget ?? target,inserted:self.lastText,raw:self.lastRaw,rich:html != nil,store:self.correctionStore)
                         } else if self.learningButton.state == .off {
                             self.annotateHistory(self.currentEntry?.id) { $0.learningStop = "自动学习已关闭" }
                         }
