@@ -46,6 +46,11 @@ final class MeetingController: NSObject {
     private var request = UUID()
     private var recordingDeviceUID: String?
     private var startupTimeout: Timer?
+    var limitMinutes: Int { MeetingDuration.minutes(settings["limit_minutes"]) }
+    private var clock = DictationClock(meetingMinutes: MeetingDuration.defaultMinutes)
+    private var limitTimer: Timer?
+    private var level: Float = 0
+    private var sampleSeconds: Double = 0
     var enabled: Bool { settings["enabled"] as? Bool == true }
     var root: URL { app.support.appendingPathComponent("meetings",isDirectory:true) }
     init(app: AppDelegate) {
@@ -136,6 +141,7 @@ final class MeetingController: NSObject {
         }
     }
     func startRecording(title: String) {
+        if app.personalLearning.preemptForInput({ [weak self] in self?.startRecording(title:title) }) { return }
         do {
             try available()
             guard AVCaptureDevice.authorizationStatus(for:.audio) == .authorized else { app.requestMic(); throw VoiceError.message("请允许麦克风后再次开始会议录音") }
@@ -145,6 +151,8 @@ final class MeetingController: NSObject {
             activeID = id; request = UUID(); let token = request
             writer = try MeetingWAVWriter(url:directory(id).appendingPathComponent("audio.wav"))
             preparing = true; recordingDeviceUID = device.uid; message = "正在打开 \(device.name)…"; app.refreshUI(); onChange?()
+            clock = DictationClock(meetingMinutes: limitMinutes)
+            level = 0; sampleSeconds = 0
             recordingHUD.showMeeting(shortcut: app.hotkey.meetingBinding.display)
             recorder.onChunk = { [weak self] data in
                 guard let self = self, self.request == token else { return }
@@ -152,9 +160,8 @@ final class MeetingController: NSObject {
             }
             recorder.onLevel = { [weak self] level, seconds in
                 guard let self = self, self.request == token else { return }
-                self.recordingHUD.updateMeeting(level:level,seconds:seconds)
-                self.message = String(format:"正在录音 %02d:%02d · %@ · 结束后生成会议资料",Int(seconds)/60,Int(seconds)%60,device.name); self.onChange?()
-                if seconds >= 8*3600 { self.stopRecording() }
+                self.level = level; self.sampleSeconds = seconds
+                if self.recording { self.updateRecordingTime(device.name) }
             }
             recorder.onError = { [weak self] message in self?.stopRecording(process:false); self?.message = message; self?.onChange?() }
             startupTimeout = Timer.scheduledTimer(withTimeInterval:20,repeats:false) { [weak self] _ in
@@ -165,14 +172,31 @@ final class MeetingController: NSObject {
                 switch result {
                 case .success:
                     self.preparing = false; self.recording = true; self.mark(id,status:"recording"); self.app.refreshUI(); self.onChange?()
+                    self.clock.start()
+                    let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+                        guard let self, self.request == token, self.recording else { return }
+                        self.updateRecordingTime(device.name)
+                    }
+                    self.limitTimer = timer; RunLoop.main.add(timer, forMode: .common)
                     if self.recordsSystemAudio { self.startSystemAudio(id, token: token) }
                 case .failure(let error): self.recordingHUD.hide(); self.preparing = false; self.writer?.close(); self.writer = nil; self.mark(id,status:"failed",error:error.localizedDescription); self.showError(error); self.app.refreshUI()
                 }
             }
         } catch { showError(error) }
     }
+    private func updateRecordingTime(_ device: String) {
+        let timing = clock.snapshot(audioSeconds: sampleSeconds)
+        recordingHUD.updateMeeting(level: level, timing: timing)
+        let label = timing.countdown.map { "剩余 " + MeetingDuration.display($0) }
+            ?? MeetingDuration.display(Int(timing.elapsed))
+        let detail = "正在录音 " + label + " · " + device
+        if message != detail { message = detail; onChange?() }
+        if timing.expired { stopRecording() }
+    }
+
     func stopRecording(process: Bool = true) {
         guard recording || preparing, let id = activeID else { return }
+        limitTimer?.invalidate(); limitTimer = nil
         recordingHUD.finishMeeting(process ? "正在生成本地会议资料" : "已暂停，可在会议资料中继续处理")
         recording = false; preparing = false; processing = true; startupTimeout?.invalidate()
         recorder.onLevel = nil; recorder.onError = nil

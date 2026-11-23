@@ -94,6 +94,20 @@ def speech_windows(turns, gap=1.5, maximum=20.0, other=(), slack=.25):
             yield a + (b - a) * i / n, a + (b - a) * (i + 1) / n, sorted(speakers)
 
 
+def window_turns(windows, turns):
+    """Overlap join for monotonically ordered windows. Never scan the full meeting per row."""
+    ordered = iter(sorted(turns, key=lambda t: t['start']))
+    following, active = next(ordered, None), []
+    for window in windows:
+        a, b = window[:2]
+        active = [t for t in active if t['end'] > a]
+        while following is not None and following['start'] < b:
+            if following['end'] > a:
+                active.append(following)
+            following = next(ordered, None)
+        yield window, [t for t in active if t['start'] < b]
+
+
 def track_turns(levels, label, diarized=None):
     """A track's turns: the speaker model's (named 远端1, 远端2…), plus sound it
     left unassigned, so no speech is skipped; without the model, sound regions."""
@@ -101,18 +115,24 @@ def track_turns(levels, label, diarized=None):
     if diarized is None:
         return sound
     found = label_turns(diarized, label)
-    missed = [r for r in sound if not any(t['start'] < r['end'] and t['end'] > r['start'] for t in found)]
+    missed = [r for (_, _, r), nearby in window_turns(((r['start'], r['end'], r) for r in sound), found) if not nearby]
     return sorted(found + missed, key=lambda t: (t['start'], t['end']))
 
 
 def own_turns(turns, other, cover=.7):
     """The turns not mostly covered by the other track's: on the microphone,
     the speakers' echo starts and stops with the remote speech it repeats."""
-    def covered(turn):
-        span = turn['end'] - turn['start']
-        shared = sum(max(0., min(turn['end'], t['end']) - max(turn['start'], t['start'])) for t in other)
-        return span > 0 and shared >= cover * span
-    return [t for t in turns if not covered(t)]
+    windows = ((t['start'], t['end'], t) for t in sorted(turns, key=lambda t: t['start']))
+    result = []
+    for (a, b, turn), nearby in window_turns(windows, other):
+        shared, end = 0., a
+        for t in nearby:
+            right = min(b, t['end'])
+            shared += max(0., right - max(end, a, t['start']))
+            end = max(end, right)
+        if b <= a or shared < cover * (b-a):
+            result.append(turn)
+    return result
 
 
 def speech_levels(path, frame=FRAME):
@@ -201,8 +221,9 @@ def merge(mic, system):
     Returns (segments, clauses dropped as echo).
     """
     kept, dropped = [], 0
-    for row in mic:
-        text, count = strip_bleed(row, system)
+    windows = ((r['start']-1., r['end']+1., r) for r in sorted(mic, key=lambda r:r['start']))
+    for (_, _, row), nearby in window_turns(windows, system):
+        text, count = strip_bleed(row, nearby)
         dropped += count
         if core(text):
             kept.append({**row, 'text': text})

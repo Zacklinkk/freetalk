@@ -56,6 +56,7 @@ def cloud_editor(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--model', help='local MLX editor model directory')
+    parser.add_argument('--adapter', help='candidate MLX adapter for a paired local evaluation')
     parser.add_argument('--cloud-protocol', choices=['openai', 'anthropic'])
     parser.add_argument('--cloud-base-url')
     parser.add_argument('--cloud-model')
@@ -75,7 +76,7 @@ def main():
         prompt_files.overrides = args.prompts
     if args.model:
         from engine import Editor
-        editor = Editor(args.model)
+        editor = Editor(args.model, adapter_path=args.adapter)
         # Warm up generation too, so the first case is not timed with it.
         editor.edit('嗯，你好。', {}, timeout=30, policy='always')
     elif args.cloud_model:

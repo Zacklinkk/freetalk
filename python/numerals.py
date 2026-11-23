@@ -167,6 +167,9 @@ def normalize(text, protected_terms=()):
         # are protected above; a following classifier still uses quantity rules.
         name = VERSION_HEAD.search(before)
         version = bool(name and not quantity and VERSION_TAIL.match(after) and (name[1] == 'v' or any(c.isupper() for c in name[1])))
+        # Single-letter model labels are unambiguous as comparison operands.
+        if re.search(r'(?:小于|大于|低于|高于|优于|不及|对比|型号为|型号是)\s*[A-Z]$', before) and VERSION_TAIL.match(after) and not quantity:
+            version = True
         ordinal = before.endswith('第') and quantity
         # 第一组 to 第十组 read as words in Chinese prose; 第12组 is the same as
         # writing 12. Spoken 两 (两个人, 两次) is also a word, except on a clock.

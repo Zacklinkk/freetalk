@@ -61,7 +61,7 @@ final class HUDPreview: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func reset() {
         timer?.invalidate(); hud.show(target:nil)
-        hud.update(recording:true,timing:DictationTiming(limit:90,elapsed:12),level:0.055,stage:"界面预览",targetIssue:nil,anchor:anchor)
+        hud.update(recording:true,timing:DictationTiming(limit:90,elapsed:12,warningSeconds:10),level:0.055,stage:"界面预览",targetIssue:nil,anchor:anchor)
         panel.makeKeyAndOrderFront(nil)
         label.stringValue = "普通录音状态：已恢复薄荷绿，没有倒计时。"
     }

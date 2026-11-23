@@ -88,6 +88,18 @@ final class Recorder {
     private var firstHostSeconds: Double?
     /// Host-clock seconds of this recording's first sample, to line up a second track.
     var firstSampleTime: Double? { queue.sync { firstHostSeconds } }
+    /// The recording being started, until its first buffer arrives; used on `control`.
+    /// Switching to a device other than the system default can still be settling
+    /// when the tap is installed (a Bluetooth default device delays it by seconds):
+    /// the tap then gets the old device's format, is refused, and no audio ever
+    /// arrives. The engine announces the settled configuration; the start is then
+    /// tried again with the new format.
+    private struct Start {
+        let device: MicDevice, token: UUID, began: TimeInterval, completion: (Result<Void, Error>) -> Void
+        var retries = 0
+    }
+    private var starting: Start?
+    private var changeObserver: NSObjectProtocol?
     var onChunk: ((Data) -> Void)?
     var onLevel: ((Float, Double) -> Void)?
     var onError: ((String) -> Void)?
@@ -120,20 +132,45 @@ final class Recorder {
         let token = nextGeneration(recording: true), began = ProcessInfo.processInfo.systemUptime
         control.async { [weak self] in
             guard let self = self, self.valid(token) else { return }
-            do { try self.open(device: device, token: token, began: began, completion: completion) }
-            catch {
-                if let audio = self.engine { audio.stop(); if self.tapInstalled { audio.inputNode.removeTap(onBus: 0); self.tapInstalled = false } }
-                self.engine = nil; self.engineUID = nil
-                self.lock.lock(); if self.generation == token { self.captureRequested = false }; self.lock.unlock()
-                DispatchQueue.main.async { if self.valid(token) { self.isRunning = false; completion(.failure(error)) } }
-            }
+            self.starting = Start(device: device, token: token, began: began, completion: completion)
+            self.attempt()
         }
     }
+    /// Open the device for the recording being started, or report why it cannot.
+    private func attempt() {
+        guard let start = starting, valid(start.token) else { return }
+        do { try open(device: start.device, token: start.token, began: start.began, completion: start.completion) }
+        catch {
+            starting = nil
+            if let audio = engine { audio.stop(); if tapInstalled { audio.inputNode.removeTap(onBus: 0); tapInstalled = false } }
+            engine = nil; engineUID = nil
+            lock.lock(); if generation == start.token { captureRequested = false }; lock.unlock()
+            DispatchQueue.main.async { if self.valid(start.token) { self.isRunning = false; start.completion(.failure(error)) } }
+        }
+    }
+    /// A start the engine reconfigured before any audio arrived is tried again,
+    /// at most twice; a healthy start delivers its first buffer well within the wait.
+    private func watch(_ audio: AVAudioEngine) {
+        if let old = changeObserver { NotificationCenter.default.removeObserver(old) }
+        changeObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: audio, queue: nil) { [weak self] _ in
+            // A Bluetooth headset switching profiles can take a second to deliver.
+            self?.control.asyncAfter(deadline: .now() + 2.5) { self?.retryStart() }
+        }
+    }
+    private func retryStart() {
+        guard var start = starting, valid(start.token), start.retries < 2, queue.sync(execute: { samples == 0 }) else { return }
+        start.retries += 1; starting = start
+        if let audio = engine { audio.stop(); if tapInstalled { audio.inputNode.removeTap(onBus: 0); tapInstalled = false } }
+        attempt()
+    }
+    deinit { if let observer = changeObserver { NotificationCenter.default.removeObserver(observer) } }
     private func configure(device: MicDevice, timings: inout [String: Any]) throws -> (AVAudioEngine, AVAudioInputNode, AVAudioFormat, AVAudioFormat, AVAudioConverter) {
         timings = ["device": device.name, "transport": device.transport, "reused_engine": engine != nil && engineUID == device.uid]
         var step = ProcessInfo.processInfo.systemUptime
         if engineUID != device.uid { engine?.stop(); engine = nil }
-        let audio = engine ?? AVAudioEngine(); engine = audio; engineUID = device.uid
+        let audio: AVAudioEngine
+        if let existing = engine { audio = existing } else { audio = AVAudioEngine(); watch(audio) }
+        engine = audio; engineUID = device.uid
         timings["engine_ms"] = (ProcessInfo.processInfo.systemUptime-step)*1000; step = ProcessInfo.processInfo.systemUptime
         let input = audio.inputNode
         timings["input_node_ms"] = (ProcessInfo.processInfo.systemUptime-step)*1000; step = ProcessInfo.processInfo.systemUptime
@@ -198,7 +235,11 @@ final class Recorder {
                     let elapsed = (ProcessInfo.processInfo.systemUptime-began)*1000
                     // Read timings only after start() has returned on the control queue.
                     self.control.async {
+                        // Once per start: a buffer still in flight from a replaced tap reports nothing.
+                        guard let start = self.starting, start.token == token else { return }
+                        self.starting = nil
                         var report = timings; report["first_buffer_ms"] = elapsed
+                        if start.retries > 0 { report["start_retries"] = start.retries }
                         DispatchQueue.main.async { if self.valid(token) { self.isRunning = true; self.onTiming?(report); completion(.success(())) } }
                     }
                 }
@@ -224,10 +265,22 @@ final class Recorder {
         if !valid(token) { audio.stop(); input.removeTap(onBus: 0); tapInstalled = false }
     }
 
+    #if E2E_HOOKS
+    /// The test recorder supplies previously captured 16 kHz mono PCM at stop.
+    func loadReplayTail(_ pcm: Data) {
+        queue.sync {
+            pending = pcm; samples = pcm.count / 2
+            peak = pcm.withUnsafeBytes { bytes in
+                bytes.bindMemory(to: Int16.self).reduce(Float(0)) { max($0, abs(Float($1)) / 32768) }
+            }
+        }
+    }
+    #endif
     func stop(_ completion: @escaping (Double, Float) -> Void) {
         let chunkHandler = onChunk
         _ = nextGeneration(recording: false); isRunning = false
         control.async {
+          self.starting = nil
           if let audio = self.engine { audio.stop(); if self.tapInstalled { audio.inputNode.removeTap(onBus: 0); self.tapInstalled = false } }
           self.queue.async {
             let tail = self.pending; self.pending.removeAll()

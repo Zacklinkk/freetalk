@@ -30,6 +30,7 @@ final class E2EHooks: NSObject {
            let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let key = value["key"] as? String, !key.isEmpty {
             CloudCredentialStore.seed(base, CloudCredentials(key: key, headers: value["headers"] as? [String: String] ?? [:]))
         }
+        if ProcessInfo.processInfo.environment["FREETALK_E2E_LATENCY"] == "1", ProcessInfo.processInfo.environment["FREETALK_E2E_SUPPORT"] != nil { E2ELatency(app:app).start() }
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(received(_:)), name: Self.name, object: nil, suspensionBehavior: .deliverImmediately)
     }
 

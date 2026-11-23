@@ -53,7 +53,7 @@ struct CloudEditorSettings {
     /// The model that rule tuning and meeting writing use.
     var strongName: String { strongModel.isEmpty ? model : strongModel }
     /// Address, a model name and a stored key: enough to try either model.
-    var serviceReady: Bool { !baseURL.isEmpty && !model.isEmpty && Self.hasSecret(baseURL) }
+    var serviceReady: Bool { !baseURL.isEmpty && !model.isEmpty && CloudCredentialStore.storedPresence(baseURL) == true }
     /// Any feature that sends text to the service is switched on.
     var anyFeature: Bool { enabled || translation || meetings || tuning || NightlySettings.load().active }
     /// Features that run without a click need the key read at launch; the
@@ -98,17 +98,15 @@ struct CloudEditorSettings {
         return value
     }
 
-    /// Whether a secret is stored, without reading it. Reading the value can
-    /// show a Keychain approval dialog; checking attributes never does, so the
-    /// settings page uses this and never blocks the main thread on a prompt.
-    static func hasSecret(_ account: String) -> Bool {
+    /// Even an attribute query can wait behind an unrelated Keychain authorization.
+    fileprivate static func queryStoredKey(_ account: String) -> OSStatus {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
             kSecAttrAccount as String: account, kSecReturnAttributes as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+        return SecItemCopyMatching(query as CFDictionary, nil)
     }
 
     /// Complete enough to try: switched on, endpoint, model and a stored key.
-    var configured: Bool { enabled && !baseURL.isEmpty && !model.isEmpty && Self.hasSecret(baseURL) }
+    var configured: Bool { enabled && serviceReady }
 
     /// Reading a value can show a Keychain prompt; call it off the main thread.
     static func secret(_ account: String) -> String? {
@@ -183,10 +181,30 @@ struct CloudCredentials: Equatable {
 enum CloudCredentialStore {
     private static let lock = NSLock()
     private static var cache: [String: CloudCredentials] = [:]
+    private static var presence: [String: Bool] = [:]
     private static var loading: Set<String> = []
     private static var waiting: [String: [(CloudCredentials?) -> Void]] = [:]
 
     static func cached(_ endpoint: String) -> CloudCredentials? { lock.lock(); defer { lock.unlock() }; return cache[endpoint] }
+    static func storedPresence(_ endpoint: String) -> Bool? {
+        lock.lock(); defer { lock.unlock() }
+        return cache[endpoint] != nil ? true : presence[endpoint]
+    }
+
+    /// UI and recording paths consult only memory. A locked or unavailable Keychain
+    /// leaves the presence unknown, so it cannot be reported as a missing key.
+    static func checkPresence(_ endpoint: String, completion: @escaping (Bool?) -> Void) {
+        if cached(endpoint) != nil { DispatchQueue.main.async { completion(true) }; return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let status = CloudEditorSettings.queryStoredKey(endpoint)
+            lock.lock()
+            let present: Bool? = cache[endpoint] != nil || status == errSecSuccess ? true
+                : status == errSecItemNotFound ? false : nil
+            presence[endpoint] = present
+            lock.unlock()
+            DispatchQueue.main.async { completion(present) }
+        }
+    }
     static var isLoading: Bool { lock.lock(); defer { lock.unlock() }; return !loading.isEmpty }
     #if E2E_HOOKS
     /// The end-to-end checks hand over the key themselves: a test build would

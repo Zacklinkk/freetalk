@@ -993,3 +993,39 @@ def completed_edits(partial):
                 edits.append(item)
             return {'repairs':[],'edits':edits,'breaks':[],'bullets':[]} if edits else None
     except (ValueError,TypeError): return None
+
+# Unnumbered parallel questions need a spoken introduction. Applied only in
+# the optional paragraph layout, after semantic edits, without changing words.
+QUESTION_LEAD = re.compile(r'(?:列.{0,14}(?:清单|列表|表)|(?:有|围绕|回答|看看|想问|讨论|回应).{0,14}(?:问题|事项|几点)|问得?的?简单一点)[^。！？]{0,12}[。！？：:]$')
+TOPIC_CHANGE = re.compile(r'^(?:另外|另一方面|接下来|不过|但是|我记得|换个角度|回到刚才|如果还)')
+QUESTION_END = re.compile(r'[？?]$')
+
+
+def contextual_layout(text, policy):
+    if policy != 'paragraphs' or '\n' in text or LITERALS.search(text) or len(core(text)) < 28:
+        return text
+    units = split_units(text)
+    parts, i, section_length = [], 0, 0
+    while i < len(units):
+        unit = units[i]
+        if parts and section_length >= 20 and TOPIC_CHANGE.match(unit.lstrip()) and len(core(''.join(units[i:]))) >= 18:
+            parts.append('\n\n')
+            section_length = 0
+        parts.append(unit)
+        section_length += len(core(unit))
+        i += 1
+        if not QUESTION_LEAD.search(unit):
+            continue
+        end = i
+        while end < len(units) and QUESTION_END.search(units[end]) and not TOPIC_CHANGE.match(units[end].lstrip()):
+            # After parallel items a direct aside to the listener often opens a
+            # separate question. Keep it in prose unless the list itself uses 你.
+            if end-i >= 2 and re.match(r'^你(?:的|刚|这|那|表|说|提)', units[end].lstrip()) and not units[i].lstrip().startswith('你'):
+                break
+            end += 1
+        if 2 <= end - i <= 5:
+            parts.append('\n\n' + '\n'.join(f'{j}. {q.lstrip()}' for j, q in enumerate(units[i:end], 1)))
+            if end < len(units):
+                parts.append('\n\n')
+            section_length, i = 0, end
+    return ''.join(parts)

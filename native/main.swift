@@ -97,6 +97,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var cloudEditor = CloudEditorPanel(app: self)
     lazy var promptTuning = PromptTuningPanel(app: self)
     lazy var promptEditor = PromptEditorPanel(app: self)
+    lazy var personalLearning = PersonalLearning(app: self)
+    private var stopUptime = 0.0
     lazy var nightly = NightlyMaintenance(app: self)
     var learningStatus: NSTextField?
     var lastHotkeyAttempt = Date.distantPast
@@ -151,8 +153,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Read cloud credentials once at launch, in the background: after an
         // update macOS asks here, not when the next recording starts.
         let cloudSettings = CloudEditorSettings.load()
-        if cloudSettings.serviceReady && cloudSettings.readsKeyAtLaunch { CloudCredentialStore.prefetch(cloudSettings.baseURL) }
+        if !cloudSettings.baseURL.isEmpty && !cloudSettings.model.isEmpty {
+            CloudCredentialStore.checkPresence(cloudSettings.baseURL) { [weak self] present in
+                guard let self else { return }
+                let current = CloudEditorSettings.load()
+                guard current.baseURL == cloudSettings.baseURL else { return }
+                self.cloudEditor.refresh()
+                self.cloudSettingsChanged()
+                if present == true && current.readsKeyAtLaunch { CloudCredentialStore.prefetch(current.baseURL) }
+            }
+        }
         nightly.schedule()
+        personalLearning.schedule()
+        historyWindow.onReview = { [weak self] entry in self?.personalLearning.review(entry) }
         appUpdater.canInstall = { [weak self] in
             guard let self = self else { return false }
             return self.phase == .idle && !self.inserter.busy && !self.modelSetup.busy && !self.meetings.busy
@@ -234,6 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         worker.onState = { [weak self] text, ready in
             guard let self = self else { return }
+            self.personalLearning.modelState(ready, message: text)
             self.modelText = text
             self.nightly.refresh()
             if ready && self.phase == .idle {
@@ -287,7 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settings = NSMenuItem(title: "设置与最近结果…", action: #selector(showWindow), keyEquivalent: ","); settings.target = self
         let exit = NSMenuItem(title: "退出 freetalk", action: #selector(quit), keyEquivalent: "q"); exit.target = self
         applicationMenu.addItem(settings)
-        let history = NSMenuItem(title: "转写历史（最多500条）…", action: #selector(showHistory), keyEquivalent: "h"); history.target = self
+        let history = NSMenuItem(title: "转写历史…", action: #selector(showHistory), keyEquivalent: "h"); history.target = self
         applicationMenu.addItem(history)
         let guide = NSMenuItem(title:"首次使用引导…",action:#selector(showOnboarding),keyEquivalent:""); guide.target = self; applicationMenu.addItem(guide)
         applicationMenu.addItem(.separator()); applicationMenu.addItem(exit)
@@ -299,7 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordMenu = NSMenuItem(title: "开始录音", action: #selector(menuToggle), keyEquivalent: ""); recordMenu.target = self; menu.addItem(recordMenu)
         let cancel = NSMenuItem(title: "取消录音 / 处理", action: #selector(cancelAction), keyEquivalent: ""); cancel.target = self; menu.addItem(cancel)
         menu.addItem(.separator())
-        for (title, action) in [("设置与最近结果…", #selector(showWindow)), ("会议资料…",#selector(showMeetings)), ("软件更新…",#selector(showUpdates)), ("首次使用引导…",#selector(showOnboarding)), ("权限设置引导…",#selector(showPermissionGuide)), ("下载本地模型…",#selector(showModels)), ("个人词库…", #selector(showVocabulary)), ("转写历史（最多500条）…", #selector(showHistory)), ("复制最近结果", #selector(copyResult)), ("重新加载模型", #selector(reloadModel)), ("退出 freetalk", #selector(quit))] {
+        for (title, action) in [("设置与最近结果…", #selector(showWindow)), ("会议资料…",#selector(showMeetings)), ("软件更新…",#selector(showUpdates)), ("首次使用引导…",#selector(showOnboarding)), ("权限设置引导…",#selector(showPermissionGuide)), ("下载本地模型…",#selector(showModels)), ("个人词库…", #selector(showVocabulary)), ("转写历史…", #selector(showHistory)), ("复制最近结果", #selector(copyResult)), ("重新加载模型", #selector(reloadModel)), ("退出 freetalk", #selector(quit))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
         statusItem.menu = menu
@@ -321,7 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let recording = phase == .recording
         recordButton?.title = recording ? "停止并转写" : phase == .preparing ? "取消启动" : "开始录音"
         recordMenu?.title = recordButton?.title ?? "开始录音"
-        recordButton?.isEnabled = !appUpdater.installing && !meetings.busy && (recording || phase == .preparing || (phase == .idle && worker.ready && !inserter.busy && !modelSetup.busy))
+        recordButton?.isEnabled = !appUpdater.installing && !meetings.busy && (recording || phase == .preparing || (phase == .idle && (worker.ready || personalLearning.busy) && !inserter.busy && !modelSetup.busy))
         recordMenu?.isEnabled = recordButton?.isEnabled ?? false
         micPicker?.isEnabled = phase == .idle && !meetings.busy
         recordingLimitView?.isEnabled = phase == .idle
@@ -562,7 +576,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func testShortcut() {
         cancelShortcutRecording()
         refreshHotkeyLabels()
-        hotkeyTester.start(binding: hotkey.binding, hotkey: hotkey) { [weak self] text in
+        hotkeyTester.start(hotkey: hotkey) { [weak self] text in
             self?.shortcutTestLabel?.stringValue = text
         }
     }
@@ -626,6 +640,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func toggle() { startOrStop(translate: false) }
     func startOrStop(translate: Bool) {
         guard !meetings.busy else { showMeetings(); return }
+        if personalLearning.preemptForInput({ [weak self] in self?.startOrStop(translate:translate) }) { return }
         if phase == .recording { stopRecording(); return }
         if phase == .preparing { cancelRecording(reload:false); return }
         guard phase == .idle, worker.ready, !inserter.busy, !modelSetup.busy, !appUpdater.installing, !promptTuning.busy, !promptEditor.checking, !nightly.busy else {
@@ -679,8 +694,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .failure(let error): self.phase = .idle; self.hudTimer?.invalidate(); self.hud.finish(success: false, message: error.localizedDescription); self.setStatus(error.localizedDescription)
             case .success:
                 self.recognizeWindowText(token: token, nearby: context["nearby"] as? String ?? "")
+                if !self.translating && !self.tutorialSession && self.target != nil {
+                    self.personalLearning.beginAudio(token)
+                }
                 self.recorder.onChunk = { [weak self] pcm in
                     guard let self = self, self.session == token else { return }
+                    self.personalLearning.append(pcm, id: token)
                     self.worker.request("chunk", ["pcm": pcm.base64EncodedString()]) { response in
                         if case .failure(let error) = response, self.session == token { self.cancelRecording(); self.setStatus(error.localizedDescription) }
                     }
@@ -701,7 +720,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.recorder.start(device: device) { response in
                     guard self.session == token, self.phase == .preparing else { return }
                     self.timer?.invalidate()
-                    if case .failure(let error) = response { self.phase = .idle; self.hudTimer?.invalidate(); self.hud.finish(success: false, message: error.localizedDescription); self.setStatus(error.localizedDescription); return }
+                    if case .failure(let error) = response { self.cancelRecording(); self.setStatus(error.localizedDescription); return }
                     self.phase = .recording; self.started = Date()
                     self.recordingClock.start()
                     self.setStatus((self.translating ? "正在录音（插入\(self.translationTargetTitle == "自动语言" ? "" : self.translationTargetTitle)译文）" : "正在录音") + " · \(device.name) · 上限 \(DictationLimit.title(self.recordingClock.limit)) · \(self.hotkey.binding.display) 停止")
@@ -725,7 +744,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func stopRecording() {
         guard phase == .recording else { return }
-        phase = .processing; stopped = Date(); timer?.invalidate(); let token = session
+        phase = .processing; stopped = Date(); stopUptime = ProcessInfo.processInfo.systemUptime; timer?.invalidate(); let token = session
         processingStage = "正在完成语音转写…"; setStatus(processingStage)
         // Stopping from settings is an explicit return to the still-unchanged target.
         if NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
@@ -734,6 +753,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         recorder.stop { duration, peak in
             guard self.session == token else { return }
+            self.personalLearning.finishAudio(id: token, keep: duration >= 0.15 && peak >= 0.001)
             if duration < 0.15 || peak < 0.001 {
                 self.phase = .idle; self.hudTimer?.invalidate(); self.hud.finish(success: false, message: "没有检测到语音"); self.setStatus("没有检测到语音，请检查麦克风音量"); return
             }
@@ -773,6 +793,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.currentEntry = VoiceHistoryEntry(id: token.uuidString, createdAt: Date(), text: self.lastText, raw: self.lastRaw,
                         targetApp: self.target?.name ?? "未锁定输入框", insertionStatus: "等待输入", audioSeconds: duration,
                         stopToTextSeconds: elapsed, cleanupSeconds: cleanup["seconds"] as? Double ?? 0, cleanupStatus: cleanupLabel, modelUsed: modelUsed)
+                    self.currentEntry?.asrBase = result["asr_base"] as? String
+                    self.currentEntry?.asrAdapter = result["asr_adapter"] as? String
+                    self.currentEntry?.cleanupAdapter = cleanup["adapter"] as? String
+                    self.currentEntry?.cleanupEngine = cleanup["engine"] as? String
+                    self.currentEntry?.cleanupBase = cleanup["base"] as? String
                     self.currentEntry?.cleanupRoute = routes.joined(separator:", ")
                     self.currentEntry?.cleanupReason = cleanup["reason"] as? String
                     self.currentEntry?.appliedEdits = cleanup["applied_edits"] as? Int
@@ -786,6 +811,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.inserter.insert(self.lastText, into: self.target, html: html) { success, message in
                         guard self.session == token else { return }
                         self.phase = .idle; self.hudTimer?.invalidate()
+                        if success { self.currentEntry?.stopToInputSeconds = ProcessInfo.processInfo.systemUptime - self.stopUptime }
                         self.currentEntry?.insertionStatus = message; self.currentEntry?.insertionCheck = self.inserter.lastCheck; self.saveResult()
                         // The user chose the cloud; say so when this result came from the local model instead.
                         let translated = translation?["status"] as? String == "translated"
@@ -821,6 +847,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Once the paste key has been delivered, cancellation cannot undo it.
         // Wait for verification instead of falsely reporting "nothing inserted".
         guard phase != .idle, !inserter.busy else { return }
+        personalLearning.discardAudio(session)
         session = UUID(); timer?.invalidate(); timeout?.invalidate(); hudTimer?.invalidate(); hud.hide(); phase = .idle; target = nil
         tutorialSession = false
         recorder.onChunk = nil; recorder.onLevel = nil; recorder.onError = nil; recorder.stop { _,_ in }
@@ -875,7 +902,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 stopToTextSeconds: max(0, Date().timeIntervalSince(stopped)), cleanupSeconds: 0, cleanupStatus: "未完成整理", modelUsed: false)
         }
         if let entry = currentEntry {
-            historyStore.upsert(entry); recentHistoryView?.refresh()
+            personalLearning.updated(entry); historyStore.upsert(entry); recentHistoryView?.refresh()
             if historyWindow.window.isVisible { historyWindow.refresh() }
         }
         let object: [String: Any] = ["text": lastText, "raw": lastRaw, "savedAt": ISO8601DateFormatter().string(from: Date())]
@@ -891,6 +918,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let id = id else { return }
         if currentEntry?.id == id { change(&currentEntry!) }
         historyStore.update(id, change)
+        if let saved = historyStore.entries.first(where:{ $0.id == id }) { personalLearning.updated(saved) }
         recentHistoryView?.refresh()
         if historyWindow.window.isVisible { historyWindow.refresh() }
     }
@@ -930,7 +958,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) { refreshUI() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(); return true }
-    func applicationWillTerminate(_ notification: Notification) { modelSetup.cancel(); inserter.restoreBeforeExit(); hotkey.stop(); worker.stop(); recorder.onChunk = nil; recorder.stop { _,_ in } }
+    func applicationWillTerminate(_ notification: Notification) { personalLearning.shutdown(); modelSetup.cancel(); inserter.restoreBeforeExit(); hotkey.stop(); worker.stop(); recorder.onChunk = nil; recorder.stop { _,_ in } }
 }
 
 let application = NSApplication.shared

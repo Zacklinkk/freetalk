@@ -114,6 +114,20 @@ import CoreGraphics
         _ = hotkey.handle(type:.flagsChanged, event:modifierEvent(61, 0), now:71)
         drain()
         assert(toggles == 2 && reports.last?.matched == false && reports.last?.hint != nil)
+        hotkey.update(translation: .defaultTranslation)
+        hotkey.onTranslate = { assertionFailure("testing must not start translation") }
+        for (code, prefix): (CGKeyCode, String) in [(46, "会议键"), (17, "翻译键")] {
+            _ = hotkey.handle(type: .keyDown, event: keyEvent(code, true, rightOption), now: 72)
+            _ = hotkey.handle(type: .keyUp, event: keyEvent(code, false, rightOption), now: 72.1)
+            drain()
+            assert(reports.last?.matched == true && reports.last?.description.hasPrefix(prefix) == true)
+        }
+        hotkey.update(translation: HotkeyBinding(trigger: .modifierTap(.rightCommand)))
+        _ = hotkey.handle(type: .flagsChanged, event: modifierEvent(54, CGEventFlags.maskCommand.rawValue | 0x10), now: 73)
+        _ = hotkey.handle(type: .flagsChanged, event: modifierEvent(54, 0), now: 73.1)
+        drain()
+        assert(reports.last?.matched == true && reports.last?.description.hasPrefix("翻译键") == true)
+        assert(meetings == 1 && toggles == 2)
         hotkey.testing = false
 
         // Dictation chords are consumed too and stay side-specific.

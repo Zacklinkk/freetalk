@@ -89,11 +89,11 @@ def fallback_layout(text):
 class Editor:
     remote, remote_timeout = None, 8.0
 
-    def __init__(self, model_path, emit=lambda value: None, mode='edits', preferences=()):
+    def __init__(self, model_path, emit=lambda value: None, mode='edits', preferences=(), adapter_path=None):
         import mlx.core as mx
         from mlx_lm import load
         self.mx, self.emit, self.mode = mx, emit, mode
-        self.model, self.tokenizer = load(model_path, tokenizer_config={"trust_remote_code": False})
+        self.model, self.tokenizer = load(model_path, tokenizer_config={"trust_remote_code": False}, adapter_path=adapter_path)
         self.set_preferences(preferences)
 
     def set_preferences(self, preferences):
@@ -153,6 +153,8 @@ class Editor:
         text, meta['tone_edits'] = apply_tone(text, context)
         from style_learning import apply as apply_style
         text, meta['style_edits'] = apply_style(text, context)
+        from edits import contextual_layout
+        text = contextual_layout(text, context.get('layout_policy'))
         meta['term_formats'] = term_count
         meta['confirmed_corrections'] = alias_count
         meta['policy'] = policy
@@ -160,6 +162,9 @@ class Editor:
         meta['warnings'] = ['unresolved_self_correction'] if unresolved_correction(text) else []
         meta['seconds'] = time.perf_counter() - started
         return text, meta
+
+    def plan_budget(self, raw):
+        return min(384 if self.mode == 'edits' else 2048, max(160, int(len(self.tokenizer.encode(raw)) * 1.5) + 80))
 
     def _edit(self, raw, context, timeout=6, policy='auto'):
         if not raw.strip():
@@ -233,7 +238,7 @@ class Editor:
         cloud_data = {k: v for k, v in data.items() if not k.startswith("当前窗口可见文字")}
         cloud_data["术语（个人词库或原文中的拼写，仅用于辨词）"] = hotwords(private)
         cloud_user = head + background(cloud_data) + near_sounds(cloud_hints) + tail
-        max_tokens = min(384 if self.mode == 'edits' else 2048, max(160, int(len(self.tokenizer.encode(raw)) * 1.5) + 80))
+        max_tokens = self.plan_budget(raw)
         cloud = {}
         for engine in (['cloud', 'local'] if self.remote else ['local']):
             if engine == 'cloud':
@@ -322,10 +327,9 @@ class Editor:
         return "".join(output).strip(), finish or (last.finish_reason if last else "empty"), last
 
     def select_fillers(self, raw, rows, timeout):
-        from filler_selection import apply_selection
+        from filler_selection import apply_selection, selection_input
         started=time.perf_counter()
-        data={'sentences':raw,'candidates':[{k:r[k] for k in ('id','old','before','after')} for r in rows]}
-        user=json.dumps(data,ensure_ascii=False)
+        user=selection_input(raw, rows)
         candidate=None;finish=None;last=None;engine='local';cloud={}
         if self.remote:
             try:
@@ -401,10 +405,32 @@ class Engine:
         budget = min(int(config.get('residentGiB', 5) * 2**30), recommended)
         mx.set_wired_limit(budget)
         self.asr = load_model(config["asrModel"])
+        from personal_learning import active_adapter
+        self.asr_adapter = active_adapter(config.get("supportPath"), config, lane="asr")
+        if self.asr_adapter:
+            try:
+                from asr_learning import attach
+                attach(self.asr, Path(self.asr_adapter))
+            except (OSError, RuntimeError, ValueError, KeyError):
+                self.asr_adapter = None
+                self.asr = load_model(config["asrModel"])
+                emit({"event":"status","message":"个人识别候选无法加载，已恢复基础识别模型"})
         import prompt_files
         # Edited prompts from Settings live next to the adopted preferences.
         prompt_files.overrides = Path(config["supportPath"]) / "prompts" if config.get("supportPath") else None
-        self.editor = Editor(config["cleanupModel"], emit, preferences=load_preferences(config.get("supportPath")))
+        from personal_learning import model_key
+        self.cleanup_base = model_key(config)
+        self.asr_base = model_key(config, "asrModel")
+        self.adapter_path = active_adapter(config.get("supportPath"), config)
+        preferences = load_preferences(config.get("supportPath"))
+        try:
+            self.editor = Editor(config["cleanupModel"], emit, preferences=preferences, adapter_path=self.adapter_path)
+        except (ValueError, OSError, RuntimeError, KeyError):
+            if not self.adapter_path:
+                raise
+            self.adapter_path = None
+            emit({"event":"status","message":"个人候选无法加载，已使用基础模型"})
+            self.editor = Editor(config["cleanupModel"], emit, preferences=preferences)
         self.reset({})
         self.asr.generate(np.zeros(16000, dtype=np.float32), temperature=0, max_tokens=16)
         self.editor.edit('你好。', {}, timeout=10)
@@ -503,7 +529,13 @@ class Engine:
         text, cleanup = self.editor.edit(raw, self.context, self.config.get("cleanupTimeoutSeconds", 6), policy=self.cleanup_policy)
         if self.cloud_error and cleanup.get("model_used") and "cloud_fallback" not in cleanup:
             cleanup["cloud_fallback"] = self.cloud_error
-        result = {"raw": raw, "text": text, "cleanup": cleanup, "segments": self.segments}
+        if getattr(self, "adapter_path", None) and cleanup.get("engine") == "local":
+            cleanup["adapter"] = Path(self.adapter_path).name
+        if cleanup.get("engine") == "local":
+            cleanup["base"] = getattr(self, "cleanup_base", None)
+        result = {"raw": raw, "text": text, "cleanup": cleanup, "segments": self.segments,
+                  "asr_base":getattr(self, "asr_base", None),
+                  "asr_adapter":Path(self.asr_adapter).name if getattr(self, "asr_adapter", None) else None}
         if self.mode == "translate":
             result.update(self.translate(text))
         return {**result, "finish_seconds": time.perf_counter() - started,

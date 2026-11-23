@@ -121,12 +121,32 @@ def last_dictation():
         return None
 
 
+def unused(minutes=30):
+    """freetalk has not been used for dictation in the last `minutes`."""
+    last = last_dictation()
+    return not last or datetime.now(timezone.utc) - last >= timedelta(minutes=minutes)
+
+
 def restore_defaults(backup):
     sh('defaults', 'delete', DOMAIN, check=False)
     sh('defaults', 'import', DOMAIN, backup)
     after = WORK / 'defaults-restored.plist'
     sh('defaults', 'export', DOMAIN, after)
     return plistlib.loads(after.read_bytes()) == plistlib.loads(backup.read_bytes())
+
+
+def audio_defaults():
+    """The system's default input and output devices and their transports, for the record."""
+    try:
+        rows = json.loads(sh('system_profiler', '-json', 'SPAudioDataType', check=False).stdout)['SPAudioDataType'][0]['_items']
+    except (ValueError, KeyError, IndexError, TypeError):
+        return {}
+    found = {}
+    for row in rows:
+        for key, name in (('coreaudio_default_audio_input_device', 'input'), ('coreaudio_default_audio_output_device', 'output')):
+            if row.get(key) == 'spaudio_yes':
+                found[name] = f"{row.get('_name', '')} ({row.get('coreaudio_device_transport', '').replace('coreaudio_device_type_', '')})"
+    return found
 
 
 def stamp(minutes_ago):
@@ -392,10 +412,13 @@ def main():
         sys.exit('build the E2E app first: bash scripts/build-e2e.sh')
     if MIC not in sh('say', '-a', '?').stdout:
         sys.exit('the BlackHole 2ch audio device is missing')
-    wait_idle(idle)
-    last = last_dictation()
-    if '--force' not in sys.argv and last and datetime.now(timezone.utc) - last < timedelta(minutes=30):
-        sys.exit('freetalk was used in the last 30 minutes; try again later or pass --force')
+    force = '--force' in sys.argv
+    if idle:
+        # Waiting anyway: also wait until freetalk has not been used for 30 minutes.
+        wait(f'{idle} s without keyboard or mouse use, screen unlocked, no dictation for 30 minutes',
+             lambda: idle_seconds() >= idle and not locked() and (force or unused()), 8 * 3600, every=10)
+    elif not force and not unused():
+        sys.exit('freetalk was used in the last 30 minutes; try again later, pass --wait-idle SECONDS or --force')
     prepare()
     was, textedit = running(), sh('pgrep', '-x', 'TextEdit', check=False).returncode == 0
     quit_freetalk()
@@ -408,6 +431,7 @@ def main():
                                  ('nightlyProfile', '-bool', 'true'), ('cloudNightlyTuning', '-bool', 'true')]:
             sh('defaults', 'write', DOMAIN, key, kind, value)
         launch()
+        results['audio_defaults'] = audio_defaults()
         results['status'] = send('status')
         print('status', json.dumps(results['status'], ensure_ascii=False), flush=True)
         for name in checks:
@@ -437,6 +461,11 @@ def main():
         # mistake while it ran stays out of reach. Its log is kept for diagnosis.
         if (SUPPORT / 'engine.log').exists():
             shutil.copy(SUPPORT / 'engine.log', WORK / 'engine.log')
+        try:
+            results['microphone_start'] = json.loads((SUPPORT / 'last-microphone-start.json').read_text())
+            write_json(WORK / 'results.json', results)
+        except (OSError, ValueError):
+            pass
         shutil.rmtree(SUPPORT, ignore_errors=True)
     print(json.dumps({k: v.get('ok') if isinstance(v, dict) and 'ok' in v else v for k, v in results.items() if k != 'status'}, ensure_ascii=False))
 

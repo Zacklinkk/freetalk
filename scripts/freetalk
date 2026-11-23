@@ -8,10 +8,15 @@ if [ -z "$task_python" ] && [ -f "$task_support/config.json" ]; then
 fi
 if [ -z "$task_python" ]; then task_python=$(command -v python3 || true); fi
 if [ -z "$task_python" ]; then printf '%s\n' '请先在 freetalk 中准备本地运行环境。' >&2; exit 1; fi
-if [ -f "$task_script_dir/../Resources/python/meeting_cli.py" ]; then
-  task_entry="$task_script_dir/../Resources/python/meeting_cli.py"
+task_module=meeting_cli
+case "${1:-}" in
+  learning) task_module=personal_learning; shift ;;
+  practice) task_module=learning_augmentation; shift ;;
+esac
+if [ -f "$task_script_dir/../Resources/python/$task_module.py" ]; then
+  task_entry="$task_script_dir/../Resources/python/$task_module.py"
 else
-  task_entry="$task_script_dir/../python/meeting_cli.py"
+  task_entry="$task_script_dir/../python/$task_module.py"
 fi
 export PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 exec "$task_python" "$task_entry" --support "$task_support" "$@"

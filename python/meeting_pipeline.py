@@ -1,4 +1,5 @@
 """Long recordings use bounded audio windows and checkpointed transcript segments."""
+from collections import Counter, defaultdict
 import fcntl
 import hashlib
 import json
@@ -31,19 +32,26 @@ def normalize_audio(source, target):
 
 
 def intervals(duration, turns, maximum=20.0, minimum=4.0):
-    points = {0., duration}
-    for row in turns:
-        points.update((max(0., min(duration, row['start'])), max(0., min(duration, row['end']))))
-    points = sorted(points)
-    spans = []
-    for a, b in zip(points, points[1:]):
-        if b <= a:
-            continue
-        active = sorted({r['speaker'] for r in turns if r['start'] < b and r['end'] > a})
-        if spans and spans[-1][2] == active:
-            spans[-1][1] = b
-        else:
-            spans.append([a, b, active])
+    # Sweep once over speaker transitions. Simultaneous turns of the same
+    # speaker need counts so one end cannot erase a still-active turn.
+    events = defaultdict(Counter)
+    events[0.]; events[duration]
+    for turn in turns:
+        a, b = max(0., turn['start']), min(duration, turn['end'])
+        if a < b:
+            events[a][turn['speaker']] += 1
+            events[b][turn['speaker']] -= 1
+    spans, speakers, previous = [], Counter(), 0.
+    for moment, changes in sorted(events.items()):
+        if previous < moment:
+            active = sorted(speakers)
+            if spans and spans[-1][2] == active:
+                spans[-1][1] = moment
+            else:
+                spans.append([previous, moment, active])
+        speakers.update(changes)
+        speakers = +speakers
+        previous = moment
     # Keep the acoustic context of short interjections. Speaker turns remain
     # separate metadata; they must not force 100 ms ASR windows.
     compact = []
@@ -73,7 +81,9 @@ def transcribe_windows(asr, path, duration, turns, hotwords, done_until, on_row,
     import soundfile as sf
     import mlx.core as mx
     with sf.SoundFile(str(path)) as audio:
-        for a, b, speakers in (windows if speech_only else intervals(duration, turns)):
+        from meeting_tracks import window_turns
+        ranges = windows if speech_only else intervals(duration, turns)
+        for (a, b, speakers), nearby in window_turns(ranges, turns):
             if b <= done_until + .001:
                 continue
             # A single-track meeting transcribes every window, with or without speaker turns.
@@ -88,7 +98,7 @@ def transcribe_windows(asr, path, duration, turns, hotwords, done_until, on_row,
                     if text:
                         row = dict(start=round(max(0., a+offset),3), end=round(max(0., b+offset),3), text=text,
                                    speaker_ids=speakers, speaker_status='multiple_speakers' if len(speakers)>1 else 'model' if speakers else 'unknown', timestamp_precision='segment')
-                        row['speaker_turns'] = [dict(start=round(max(0., max(a,t['start'])+offset),3),end=round(max(0., min(b,t['end'])+offset),3),speaker=t['speaker']) for t in turns if t['start']<b and t['end']>a]
+                        row['speaker_turns'] = [dict(start=round(max(0., max(a,t['start'])+offset),3),end=round(max(0., min(b,t['end'])+offset),3),speaker=t['speaker']) for t in nearby]
                         row['overlap_seconds'] = round(overlap_duration(row['speaker_turns']),3)
                         if row['overlap_seconds'] > 0: row['speaker_status'] = 'overlap'
                         on_row(row)
@@ -176,8 +186,17 @@ def file_digest(paths):
 
 
 def overlap_duration(turns):
-    points = sorted({p for t in turns for p in (t['start'],t['end'])})
-    return sum(b-a for a,b in zip(points,points[1:]) if len({t['speaker'] for t in turns if t['start']<b and t['end']>a})>1)
+    events = sorted((p, t['speaker'], delta) for t in turns if t['end'] > t['start']
+                    for p, delta in ((t['start'], 1), (t['end'], -1)))
+    counts, previous, total = Counter(), 0., 0.
+    for moment, speaker, delta in events:
+        if len(counts) > 1:
+            total += moment - previous
+        counts[speaker] += delta
+        if not counts[speaker]:
+            del counts[speaker]
+        previous = moment
+    return total
 
 
 def validate_segments(rows):

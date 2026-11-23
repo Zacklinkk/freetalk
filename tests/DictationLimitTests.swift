@@ -40,6 +40,17 @@ import Foundation
             precondition(clock.snapshot(at:1_002,audioSeconds:.nan).elapsed == 2)
             precondition(clock.snapshot(at:.nan,audioSeconds:2).elapsed == 2)
         }
+        precondition(MeetingDuration.minutes(nil) == 240 && MeetingDuration.minutes(61) == 61)
+        for invalid: Any in [true, 0, -1, 481, 0.5, "60"] { precondition(MeetingDuration.minutes(invalid) == 240) }
+        var meeting = DictationClock(meetingMinutes: 240)
+        precondition(meeting.snapshot(at: 50_000).elapsed == 0)
+        meeting.start(at: 40)
+        precondition(meeting.snapshot(at: 40 + 14100 - 0.01).countdown == nil)
+        for n in 0...300 { precondition(meeting.snapshot(at: 40 + Double(14400-n)).countdown == n) }
+        precondition(meeting.snapshot(at: 14440, audioSeconds: 20).expired)
+        precondition(MeetingDuration.display(300) == "05:00" && MeetingDuration.display(14399) == "3:59:59")
+        var short = DictationClock(meetingMinutes: 2); short.start(at: 0)
+        precondition(short.snapshot(at: 0).countdown == 120)
         var original = DictationClock(limit:90); original.start(at:100)
         defaults.set(30,forKey:DictationLimit.preferenceKey)
         precondition(!original.snapshot(at:130).expired, "Changing preferences cannot shorten an active session")
