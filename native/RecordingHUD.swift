@@ -96,7 +96,7 @@ final class RecordingHUD: NSObject {
             spectrum.leadingAnchor.constraint(equalTo:surface.leadingAnchor,constant:14),spectrum.centerYAnchor.constraint(equalTo:surface.centerYAnchor),spectrum.widthAnchor.constraint(equalToConstant:44),spectrum.heightAnchor.constraint(equalToConstant:44),
             icon.centerXAnchor.constraint(equalTo:spectrum.centerXAnchor),icon.centerYAnchor.constraint(equalTo:spectrum.centerYAnchor),icon.widthAnchor.constraint(equalToConstant:23),icon.heightAnchor.constraint(equalToConstant:23),
             title.leadingAnchor.constraint(equalTo:spectrum.trailingAnchor,constant:8),title.topAnchor.constraint(equalTo:surface.topAnchor,constant:15),title.trailingAnchor.constraint(lessThanOrEqualTo:clock.leadingAnchor,constant:-6),
-            clock.trailingAnchor.constraint(equalTo:action.leadingAnchor,constant:-7),clock.centerYAnchor.constraint(equalTo:title.centerYAnchor),clock.widthAnchor.constraint(equalToConstant:36),
+            clock.trailingAnchor.constraint(equalTo:action.leadingAnchor,constant:-7),clock.centerYAnchor.constraint(equalTo:title.centerYAnchor),clock.widthAnchor.constraint(greaterThanOrEqualToConstant:36),
             destination.leadingAnchor.constraint(equalTo:title.leadingAnchor),destination.trailingAnchor.constraint(equalTo:cancel.trailingAnchor),destination.topAnchor.constraint(equalTo:title.bottomAnchor,constant:5),
             cancel.trailingAnchor.constraint(equalTo:surface.trailingAnchor,constant:-15),cancel.centerYAnchor.constraint(equalTo:title.centerYAnchor),cancel.widthAnchor.constraint(equalToConstant:16),cancel.heightAnchor.constraint(equalToConstant:20),
             action.trailingAnchor.constraint(equalTo:cancel.leadingAnchor,constant:-10),action.centerYAnchor.constraint(equalTo:title.centerYAnchor),action.widthAnchor.constraint(equalToConstant:32),action.heightAnchor.constraint(equalToConstant:28)
@@ -121,14 +121,18 @@ final class RecordingHUD: NSObject {
         destination.stringValue = originalDestination; title.stringValue = "准备会议录音"
         action.isEnabled = true
     }
-    func updateMeeting(level:Float,seconds:Double) {
-        guard panel.isVisible,!finished else { return }
-        title.stringValue = "会议录音"; destination.stringValue = originalDestination
-        clock.stringValue = String(format:"%02d:%02d",Int(seconds)/60,Int(seconds)%60)
-        spectrum.active = true; spectrum.level = level
+    func updateMeeting(level: Float, timing: DictationTiming) {
+        guard panel.isVisible, !finished else { return }
+        let remaining = timing.countdown
+        title.stringValue = remaining == nil ? "会议录音" : "会议即将自动结束"
+        destination.stringValue = originalDestination
+        clock.stringValue = MeetingDuration.display(remaining ?? Int(timing.elapsed))
+        clock.setAccessibilityLabel(remaining == nil ? "会议录音时长" : "会议录音自动结束倒计时")
+        clock.textColor = remaining == nil ? .secondaryLabelColor : VoiceSpectrum.warningRed
+        spectrum.active = true; spectrum.level = level; spectrum.setWarning(remaining != nil)
     }
     func finishMeeting(_ message:String) {
-        finished = true; spectrum.active = false; title.stringValue = "会议录音已停止"
+        resetWarning(); finished = true; spectrum.active = false; title.stringValue = "会议录音已停止"
         destination.stringValue = message; clock.stringValue = ""; action.isEnabled = false
         scheduleHide()
     }

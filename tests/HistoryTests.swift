@@ -33,6 +33,16 @@ import Foundation
         precondition(learned.entries.count == 500 && !learned.entries.contains { $0.id == "no-such-entry" })
         var off = learned.entries[1]; off.learningStop = "自动学习已关闭"
         precondition(off.learningSummary == "未学习：自动学习已关闭")
+        let suite = "freetalk-history-"+UUID().uuidString
+        let defaults = UserDefaults(suiteName:suite)!
+        defer { defaults.removePersistentDomain(forName:suite) }
+        let larger = VoiceHistoryStore(directory:directory,defaults:defaults)
+        larger.setCapacity(2000)
+        precondition(VoiceHistoryStore(directory:directory,defaults:defaults).capacity == 2000 && larger.p95 == nil)
+        for i in 1...20 {
+            larger.update(String(505-i)) { $0.stopToInputSeconds=Double(i) }
+        }
+        precondition(larger.p95 == 19)
         let permissions = try FileManager.default.attributesOfItem(atPath: directory.appendingPathComponent("history.json").path)[.posixPermissions] as! NSNumber
         precondition(permissions.intValue == 0o600)
         let corrupt = Data("do not overwrite corrupt history".utf8)

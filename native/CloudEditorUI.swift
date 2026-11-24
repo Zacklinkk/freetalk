@@ -48,8 +48,11 @@ final class CloudEditorPanel: NSObject {
     func refresh() {
         let settings = CloudEditorSettings.load()
         if settings.baseURL.isEmpty || settings.model.isEmpty { status.stringValue = "尚未配置云端服务，全部功能使用本地模型。"; return }
-        if !CloudEditorSettings.hasSecret(settings.baseURL) { status.stringValue = "缺少 API Key：请填写后保存。当前全部使用本地模型。"; return }
-        if status.stringValue.isEmpty || status.stringValue.hasPrefix("当前") || status.stringValue.hasPrefix("尚未") || status.stringValue.hasPrefix("缺少") {
+        guard let present = CloudCredentialStore.storedPresence(settings.baseURL) else {
+            status.stringValue = "等待钥匙串确认。当前可以使用本地模型。"; return
+        }
+        if !present { status.stringValue = "缺少 API Key：请填写后保存。当前全部使用本地模型。"; return }
+        if status.stringValue.isEmpty || status.stringValue.hasPrefix("当前") || status.stringValue.hasPrefix("尚未") || status.stringValue.hasPrefix("缺少") || status.stringValue.hasPrefix("等待钥匙串") {
             status.stringValue = Self.summary(settings)
         }
     }
@@ -90,7 +93,14 @@ final class CloudEditorPanel: NSObject {
     private func storeTyped(for s: CloudEditorSettings, next: @escaping (Error?) -> Void) throws {
         let typed = try typedCredentials()
         guard typed.key != nil || typed.headers != nil else {
-            next(CloudEditorSettings.hasSecret(s.baseURL) ? nil : VoiceError.message("请输入 API Key 后保存")); return
+            CloudCredentialStore.checkPresence(s.baseURL) { present in
+                switch present {
+                case true: next(nil)
+                case false: next(VoiceError.message("请输入 API Key 后保存"))
+                default: next(VoiceError.message("钥匙串暂时不可用，请解锁后重试"))
+                }
+            }
+            return
         }
         key.stringValue = ""; headers.stringValue = ""
         CloudCredentialStore.update(s.baseURL, key: typed.key, headers: typed.headers, completion: next)

@@ -120,16 +120,14 @@ final class HotkeyRecorder {
 final class HotkeyTestController {
     private weak var hotkey: GlobalHotkey?
     private var timer: Timer?
-    private var binding: HotkeyBinding?
     private var onStatus: ((String) -> Void)?
     private var lastReceived: String?
     var isRunning: Bool { timer != nil }
 
-    func start(binding: HotkeyBinding, hotkey: GlobalHotkey, seconds: TimeInterval = 8,
+    func start(hotkey: GlobalHotkey, seconds: TimeInterval = 8,
                onStatus: @escaping (String) -> Void) {
         stop()
         self.hotkey = hotkey
-        self.binding = binding
         self.onStatus = onStatus
         guard hotkey.active else {
             if let failure = hotkey.failure { onStatus("监听未启动：\(failure)。请先处理下方的系统权限。") }
@@ -138,11 +136,13 @@ final class HotkeyTestController {
         }
         hotkey.testing = true
         hotkey.onTestEvent = { [weak self] event in self?.handle(event) }
-        onStatus("测试中：请在任意应用中按下 \(binding.display)（\(Int(seconds)) 秒）")
+        var shortcuts = ["口述 \(hotkey.binding.display)", "会议 \(hotkey.meetingBinding.display)"]
+        if let translation = hotkey.translationBinding { shortcuts.append("翻译 \(translation.display)") }
+        onStatus("测试中，请在 \(Int(seconds)) 秒内按下任一快捷键。\(shortcuts.joined(separator: "，"))")
         timer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
-            guard let self, let binding = self.binding else { return }
+            guard let self else { return }
             if let last = self.lastReceived {
-                self.finish("测试结束：监听正常，但没有匹配到 \(binding.display)。最后收到「\(last)」，请检查左右键或组合是否一致。")
+                self.finish("测试结束。最后收到「\(last)」，与已配置的快捷键不匹配。请检查左右键或组合。")
             } else if IsSecureEventInputEnabled() {
                 // Secure Event Input (password fields, Terminal's “Secure
                 // Keyboard Entry”) hides keystrokes from every event tap.
@@ -157,11 +157,11 @@ final class HotkeyTestController {
         timer?.invalidate(); timer = nil
         hotkey?.testing = false
         hotkey?.onTestEvent = nil
-        hotkey = nil; binding = nil; onStatus = nil; lastReceived = nil
+        hotkey = nil; onStatus = nil; lastReceived = nil
     }
 
     private func handle(_ event: HotkeyTestEvent) {
-        guard let binding else { return }
+        guard let hotkey else { return }
         lastReceived = event.description
         if event.matched {
             let elapsed = event.elapsed.map { String(format: "（%.2f 秒）", $0) } ?? ""
@@ -173,11 +173,11 @@ final class HotkeyTestController {
             onStatus?("收到 \(event.description)，但\(hint)，不算一次轻按。请轻按后立即松开。")
             return
         }
-        if binding.isModifierTap && event.description == binding.display {
+        if hotkey.binding.isModifierTap && event.description == hotkey.binding.display {
             onStatus?("已按下 \(event.description)，松开后完成测试…")
             return
         }
-        onStatus?("监听正常：收到「\(event.description)」，但未匹配 \(binding.display)。")
+        onStatus?("收到「\(event.description)」，请按完整的口述、会议或翻译快捷键。")
     }
 
     private func finish(_ message: String) {

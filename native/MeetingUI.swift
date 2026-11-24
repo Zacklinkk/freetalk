@@ -20,6 +20,8 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     var controller: MeetingController { app.meetings }
     let enable = NSButton(checkboxWithTitle:"启用会议资料 · 可选功能",target:nil,action:nil)
     let diarization = NSButton(checkboxWithTitle:"区分说话人 · 额外下载约 107 MB",target:nil,action:nil)
+    let limitField = NSTextField()
+    var saveLimit: NSButton!
     let retain = NSButton(checkboxWithTitle:"完成后保留本机录音",target:nil,action:nil)
     let systemAudio = NSButton(checkboxWithTitle:"同时录制电脑播放的声音（线上会议的远端；需要“屏幕录制”权限）",target:nil,action:nil)
     let source = NSPopUpButton()
@@ -136,7 +138,14 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         optionsProgress.minValue = 0; optionsProgress.maxValue = 1; optionsProgress.style = .bar; optionsProgress.isIndeterminate = false
         saveTermsButton = action("保存术语",#selector(saveTerms))
         let termsRow = app.row([terms,saveTermsButton])
-        let all = stack([app.label("本地基础整理始终保留",size:18),diarization,app.row([source,downloadButton]),optionsStatus,optionsProgress,systemAudio,tracks,retain,termsRow,privacy,cloudDisclosure,cloudStatus,cloudBox,agent,action("复制 CLI 路径",#selector(copyCLI)),action("查看说话人模型与许可",#selector(openModelSource))],spacing:10)
+        limitField.stringValue = String(controller.limitMinutes)
+        limitField.setAccessibilityLabel("会议录音上限（分钟）")
+        limitField.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        limitField.target = self; limitField.action = #selector(applyDuration)
+        saveLimit = action("应用", #selector(applyDuration))
+        let limitRow = app.row([app.label("每次最多录制", size: 13), limitField, app.label("分钟", size: 13), saveLimit])
+        let limitHint = app.label("1–480 分钟，默认 4 小时。最后 5 分钟显示红色倒计时。", size: 12, color: .secondaryLabelColor)
+        let all = stack([app.label("本地基础整理始终保留",size:18),limitRow,limitHint,diarization,app.row([source,downloadButton]),optionsStatus,optionsProgress,systemAudio,tracks,retain,termsRow,privacy,cloudDisclosure,cloudStatus,cloudBox,agent,action("复制 CLI 路径",#selector(copyCLI)),action("查看说话人模型与许可",#selector(openModelSource))],spacing:10)
         terms.widthAnchor.constraint(greaterThanOrEqualToConstant:160).isActive = true
         terms.setContentHuggingPriority(.defaultLow,for:.horizontal)
         saveTermsButton.setContentCompressionResistancePriority(.required,for:.horizontal)
@@ -148,16 +157,29 @@ final class MeetingView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         optionsScroll = scroll
         return scroll
     }
+    @objc private func applyDuration() {
+        guard !controller.busy else { return }
+        guard let minutes = Int(limitField.stringValue.trimmingCharacters(in: .whitespaces)),
+              MeetingDuration.range.contains(minutes) else {
+            controller.showMessage("请输入 1 至 480 之间的整数分钟。"); return
+        }
+        let previous = controller.settings["limit_minutes"]
+        controller.settings["limit_minutes"] = minutes
+        do { try controller.saveSettings(); controller.showMessage("下次会议最多录制 " + String(minutes) + " 分钟。") }
+        catch { controller.settings["limit_minutes"] = previous; controller.showError(error) }
+        limitField.stringValue = String(controller.limitMinutes)
+    }
+
     func refreshState() {
         shortcutHint.stringValue = "\(app.hotkey.meetingBinding.display) 开始或结束会议录音"
         let running = controller.busy
         enable.isEnabled = !running; enable.state = controller.enabled ? .on : .off
         let ready = controller.enabled && !running && app.phase == .idle && app.worker.ready && !app.modelSetup.busy && !app.appUpdater.installing
         record.title = controller.recording || controller.preparing ? "结束并生成资料" : "开始会议录音"
-        record.isEnabled = ready || controller.recording || controller.preparing; importButton.isEnabled = ready
+        record.isEnabled = ready || (controller.enabled && app.personalLearning.busy) || controller.recording || controller.preparing; importButton.isEnabled = ready
         resumeButton.isEnabled = ready && selectedID != nil; cancelButton.isEnabled = running
         title.isEnabled = !running
-        for v in [diarization,retain,source,systemAudio] as [NSControl] { v.isEnabled = controller.enabled && !running }
+        for v in [diarization,retain,source,systemAudio,limitField,saveLimit!] as [NSControl] { v.isEnabled = controller.enabled && !running }
         downloadButton.isEnabled = controller.enabled && diarization.state == .on && !running && app.phase == .idle
         cloudBox.isHidden = cloudDisclosure.state != .on
         cloudDisclosure.image = NSImage(systemSymbolName:cloudDisclosure.state == .on ? "chevron.down" : "chevron.right",accessibilityDescription:nil)

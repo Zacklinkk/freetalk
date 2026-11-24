@@ -52,7 +52,8 @@ final class RecentHistoryView: NSStackView, NSTableViewDataSource, NSTableViewDe
         scroll.contentView.scroll(to: NSPoint(x: 0, y: y)); scroll.reflectScrolledClipView(scroll.contentView)
         status.stringValue = store.error ?? (rows.isEmpty
             ? "还没有转写记录。完成一次语音输入后，会显示在这里。"
-            : "\(rows.count) 条 · 最新在前 · 最多保留 \(VoiceHistoryStore.limit) 条，自动删除最旧记录")
+            : "\(rows.count) 条 · 最新在前 · 最多保留 \(store.capacity) 条，自动删除最旧记录")
+        if let p95 = store.p95 { status.stringValue += String(format:" · 停止到确认输入 P95 %.2f 秒", p95) }
         status.textColor = store.error == nil ? .secondaryLabelColor : .systemRed
     }
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }

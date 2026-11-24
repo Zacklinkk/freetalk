@@ -26,11 +26,19 @@ import Foundation
         // (the tuning button waited forever when the launch read was pending).
         let missing = "https://example.invalid/v1-\(UUID().uuidString)"
         var answers = 0
+        var checked = false
+        precondition(CloudCredentialStore.storedPresence(missing) == nil)
+        CloudCredentialStore.checkPresence(missing) { present in
+            precondition(Thread.isMainThread && present == false)
+            checked = true
+        }
+        precondition(!checked, "the UI must return before the Keychain finishes")
         CloudCredentialStore.prefetch(missing) { precondition($0 == nil); answers += 1 }
         CloudCredentialStore.prefetch(missing) { precondition($0 == nil); answers += 1 }
         let deadline = Date().addingTimeInterval(10)
-        while answers < 2 && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        while (answers < 2 || !checked) && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
         precondition(answers == 2, "every prefetch caller gets a completion")
+        precondition(checked && CloudCredentialStore.storedPresence(missing) == false)
         print("Cloud credentials passed: single-item round trip, legacy bare key, header filtering, payload without Keychain access, concurrent prefetch callers")
     }
 }

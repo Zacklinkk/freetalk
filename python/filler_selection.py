@@ -32,6 +32,10 @@ def candidates(raw, scene='', keep=()):
     return rows
 
 
+def selection_input(raw, rows):
+    return json.dumps({'sentences':raw, 'candidates':[{k:r[k] for k in ('id','old','before','after')} for r in rows]}, ensure_ascii=False)
+
+
 def apply_selection(raw, rows, selection):
     if not isinstance(selection,dict) or set(selection)!={'drop'} or not isinstance(selection['drop'],list):
         raise ValueError('Invalid filler selection')

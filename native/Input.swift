@@ -366,7 +366,7 @@ final class GlobalHotkey {
                 dictationTap.cancel()
                 let fire = translationTap.flags(keyCode: code, down: down, otherModifiers: !held.subtracting([target]).isEmpty, now: now, target: target)
                 if fire {
-                    if testing { report(HotkeyTestEvent(description: "翻译键 \(target.display)", matched: false, elapsed: nil)) }
+                    if testing { report(HotkeyTestEvent(description: "翻译键 \(target.display)", matched: true, elapsed: nil)) }
                     else { DispatchQueue.main.async { self.onTranslate?() } }
                 }
                 return false
@@ -400,7 +400,7 @@ final class GlobalHotkey {
         let meeting = meetingChord.event(binding: meetingBinding, keyCode: code, down: down, held: held, repeated: repeated)
         if meeting.fire {
             if testing {
-                report(HotkeyTestEvent(description: "会议键 \(meetingBinding.display)", matched: false, elapsed: nil))
+                report(HotkeyTestEvent(description: "会议键 \(meetingBinding.display)", matched: true, elapsed: nil))
             } else {
                 DispatchQueue.main.async { self.onMeeting?() }
             }
@@ -410,7 +410,7 @@ final class GlobalHotkey {
         if let translation = translationBinding, !translation.isModifierTap {
             let pressed = translationChord.event(binding: translation, keyCode: code, down: down, held: held, repeated: repeated)
             if pressed.fire {
-                if testing { report(HotkeyTestEvent(description: "翻译键 \(translation.display)", matched: false, elapsed: nil)) }
+                if testing { report(HotkeyTestEvent(description: "翻译键 \(translation.display)", matched: true, elapsed: nil)) }
                 else { DispatchQueue.main.async { self.onTranslate?() } }
             }
             if pressed.consume { return true }

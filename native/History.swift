@@ -16,6 +16,16 @@ struct VoiceHistoryEntry: Codable, Identifiable {
     var cleanupReason: String? = nil
     var appliedEdits: Int? = nil
     var rejectedEdits: Int? = nil
+    /// Monotonic time from stop to confirmed insertion, available on newer entries.
+    var stopToInputSeconds: Double? = nil
+    var cleanupAdapter: String? = nil
+    var asrBase: String? = nil
+    var asrAdapter: String? = nil
+    var cleanupBase: String? = nil
+    var cleanupEngine: String? = nil
+    var reviewedFinal: String? = nil
+    /// User confirmed that this text was sent and matches the words in the audio.
+    var audioAligned: Bool? = nil
     /// How a paste was confirmed (exact/normalized/contains_insert) or why not
     /// (no_value/unchanged/different/cleared). Never contains text.
     var insertionCheck: String? = nil
@@ -37,19 +47,34 @@ struct VoiceHistoryEntry: Codable, Identifiable {
 }
 
 final class VoiceHistoryStore {
-    static let limit = 500
+    static let capacities = [500, 2000, 5000]
+    private(set) var capacity: Int
+    private let defaults: UserDefaults
+    var p95: Double? {
+        let values = entries.compactMap(\.stopToInputSeconds).filter { $0.isFinite && $0 >= 0 }.sorted()
+        guard !values.isEmpty else { return nil }
+        return values[Int(ceil(Double(values.count) * 0.95)) - 1]
+    }
+    func setCapacity(_ value: Int) {
+        guard Self.capacities.contains(value) else { return }
+        capacity = value; defaults.set(value, forKey: "voiceHistoryCapacity")
+        // Prune when the next new entry is recorded, together with its atomic write.
+    }
     private(set) var entries: [VoiceHistoryEntry] = []
     private(set) var error: String?
     private var writable = true
     private let file: URL
-    init(directory: URL) {
+    init(directory: URL, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let saved = defaults.integer(forKey: "voiceHistoryCapacity")
+        capacity = Self.capacities.contains(saved) ? saved : 500
         file = directory.appendingPathComponent("history.json")
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             if FileManager.default.fileExists(atPath: file.path) {
                 let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
                 entries = try decoder.decode([VoiceHistoryEntry].self, from: Data(contentsOf: file))
-                if entries.count > Self.limit { entries = Array(entries.prefix(Self.limit)); persist() }
+                if entries.count > capacity { entries = Array(entries.prefix(capacity)); persist() }
             } else {
                 // Migrate the one record the previous version kept, without inventing history.
                 let legacy = directory.appendingPathComponent("last-result.json")
@@ -72,7 +97,7 @@ final class VoiceHistoryStore {
         guard !entry.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if let index = entries.firstIndex(where: { $0.id == entry.id }) { entries[index] = entry }
         else { entries.insert(entry, at: 0) }
-        entries = Array(entries.prefix(Self.limit)); persist()
+        entries = Array(entries.prefix(capacity)); persist()
     }
     /// Change one saved entry in place, e.g. when learning reports on it later. Unknown ids are ignored.
     func update(_ id: String, _ change: (inout VoiceHistoryEntry) -> Void) {
@@ -96,11 +121,13 @@ final class HistoryWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate 
     let table = NSTableView(), text = NSTextView(), search = NSSearchField(), info = NSTextField(wrappingLabelWithString: "")
     let mode = NSSegmentedControl(labels: ["整理结果", "原始转写", "你改后的文字"], trackingMode: .selectOne, target: nil, action: nil)
     private var rows: [VoiceHistoryEntry] = []
+    let confirm = NSButton(title: "核对发送稿…", target: nil, action: nil)
+    var onReview: ((VoiceHistoryEntry) -> Void)?
     init(store: VoiceHistoryStore) {
         self.store = store
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 580), styleMask: [.titled,.closable,.miniaturizable,.resizable], backing: .buffered, defer: false)
         super.init()
-        window.title = "freetalk · 转写历史（最多500条）"; window.isReleasedWhenClosed = false; window.center()
+        window.title = "freetalk · 转写历史"; window.isReleasedWhenClosed = false; window.center()
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false
         window.contentView!.addSubview(stack)
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 18), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -18), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 18), stack.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -18)])
@@ -114,7 +141,8 @@ final class HistoryWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         stack.addArrangedSubview(list); list.heightAnchor.constraint(equalToConstant: 220).isActive = true; list.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         mode.selectedSegment = 0; mode.target = self; mode.action = #selector(selectionChanged)
         let copy = NSButton(title: "复制所选记录", target: self, action: #selector(copySelected)); copy.bezelStyle = .rounded
-        let actions = NSStackView(views: [mode,copy]); actions.orientation = .horizontal; actions.spacing = 12; stack.addArrangedSubview(actions)
+        confirm.target = self; confirm.action = #selector(reviewFinal)
+        let actions = NSStackView(views: [mode,copy,confirm]); actions.orientation = .horizontal; actions.spacing = 12; stack.addArrangedSubview(actions)
         info.font = .systemFont(ofSize: 12); info.textColor = .secondaryLabelColor; stack.addArrangedSubview(info)
         text.isEditable = false; text.isSelectable = true; text.font = .systemFont(ofSize: 14); text.textContainerInset = NSSize(width: 8, height: 8)
         text.isVerticallyResizable = true; text.isHorizontallyResizable = false; text.autoresizingMask = [.width]; text.textContainer?.widthTracksTextView = true; text.setAccessibilityLabel("历史记录内容")
@@ -150,13 +178,19 @@ final class HistoryWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         let label = NSTextField(labelWithString: content); label.lineBreakMode = .byTruncatingTail; return label
     }
     func tableViewSelectionDidChange(_ notification: Notification) { selectionChanged() }
+    @objc func reviewFinal() {
+        if rows.indices.contains(table.selectedRow) { onReview?(rows[table.selectedRow]) }
+    }
     @objc func selectionChanged() {
-        guard rows.indices.contains(table.selectedRow) else { text.string = ""; info.stringValue = store.error ?? "没有匹配的记录 · 最多保留500条，自动淘汰最旧记录"; return }
+        confirm.isEnabled = rows.indices.contains(table.selectedRow) && onReview != nil
+        guard rows.indices.contains(table.selectedRow) else { text.string = ""; info.stringValue = store.error ?? "没有匹配的记录 · 最多保留\(store.capacity)条，自动淘汰最旧记录"; return }
         let entry = rows[table.selectedRow]
-        mode.setEnabled(entry.editedText != nil, forSegment: 2)
-        if mode.selectedSegment == 2 && entry.editedText == nil { mode.selectedSegment = 0 }
-        text.string = [entry.text, entry.raw, entry.editedText ?? entry.text][mode.selectedSegment]
-        info.stringValue = "\(store.entries.count)/500条 · \(entry.cleanupStatus) · \(entry.insertionStatus)\n" + String(format: "录音 %.1f秒 · 停止到文字 %.2f秒 · 整理 %.2f秒", entry.audioSeconds, entry.stopToTextSeconds, entry.cleanupSeconds)
+        mode.setEnabled(entry.editedText != nil || entry.reviewedFinal != nil, forSegment: 2)
+        if mode.selectedSegment == 2 && entry.editedText == nil && entry.reviewedFinal == nil { mode.selectedSegment = 0 }
+        text.string = [entry.text, entry.raw, entry.reviewedFinal ?? entry.editedText ?? entry.text][mode.selectedSegment]
+        info.stringValue = "\(store.entries.count)/\(store.capacity)条 · \(entry.cleanupStatus) · \(entry.insertionStatus)\n" + String(format: "录音 %.1f秒 · 停止到文字 %.2f秒 · 整理 %.2f秒", entry.audioSeconds, entry.stopToTextSeconds, entry.cleanupSeconds)
+        if let latency = entry.stopToInputSeconds { info.stringValue += String(format:" · 停止到输入 %.2f秒", latency) }
+        if entry.reviewedFinal != nil { info.stringValue += " · 已核对发送稿" }
         if entry.modelUsed, let count=entry.appliedEdits { info.stringValue += " · 词句修改 \(count) 处" }
         if let count=entry.rejectedEdits, count>0 { info.stringValue += " · 保守拦截 \(count) 处" }
         if entry.editedText != nil { info.stringValue += "\n插入后你改过这段文字，可切换到「你改后的文字」查看" }
